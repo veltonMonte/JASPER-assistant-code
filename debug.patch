@@ -1,0 +1,10 @@
+--- src/ai/gemini-live.ts
++++ src/ai/gemini-live.ts
+@@ -215,6 +215,7 @@
+     }
+ 
+     const serverContent = response.serverContent;
++    console.log('DEBUG: Gemini response received', JSON.stringify(response));
+     if (!serverContent) return;
+ 
+     if (serverContent.interrupted) {

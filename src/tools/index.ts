@@ -228,7 +228,7 @@ export const geminiToolDeclarations = [
   },
   {
     name: 'renderizar_grafico',
-    description: 'Renderiza um gráfico na interface do usuário. Use isso sempre que o usuário pedir um exemplo gráfico.',
+    description: 'Renderiza um gráfico interativo (barras, linhas ou área) na interface. Use OBRIGATORIAMENTE sempre que o usuário pedir para gerar, montar ou ver gráficos, estatísticas de pesquisas eleitorais, comparativos ou dados numéricos visuais.',
     parameters: {
       type: 'OBJECT',
       properties: {
@@ -347,9 +347,32 @@ export async function executeToolByName(name: string, args: Record<string, any> 
       case 'get_device_status':
         result = await getDeviceStatus(args.deviceName || '');
         break;
-      case 'renderizar_grafico':
-        result = { chartConfig: args.chartConfig, success: true };
+      case 'renderizar_grafico': {
+        let finalConfig = args.chartConfig;
+        if (typeof finalConfig === 'object') {
+          finalConfig = JSON.stringify(finalConfig);
+        } else if (!finalConfig && (args.data || args.series)) {
+          const chartType = args.chartType || args.type || 'bar';
+          const data = args.data || [];
+          const xKey = args.xKey || (data[0] ? Object.keys(data[0])[0] : 'name');
+          const keys = args.dataKeys || (data[0] ? Object.keys(data[0]).filter((k: string) => k !== xKey) : ['valor']);
+          const colors = ['#38bdf8', '#818cf8', '#34d399', '#f472b6', '#fbbf24'];
+          const series = args.series || keys.map((k: string, i: number) => ({
+            dataKey: k,
+            name: k.charAt(0).toUpperCase() + k.slice(1),
+            color: colors[i % colors.length]
+          }));
+          finalConfig = JSON.stringify({
+            title: args.title || 'Gráfico de Dados',
+            type: chartType,
+            data,
+            xKey,
+            series
+          });
+        }
+        result = { chartConfig: finalConfig, success: true, message: 'Gráfico interativo gerado e renderizado com sucesso.' };
         break;
+      }
       case 'renderizar_video':
         result = { url: args.url, success: true };
         break;

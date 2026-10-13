@@ -16,39 +16,43 @@ export class GeminiBrain {
   constructor() {
     if (config.gemini.apiKey) {
       this.genAI = new GoogleGenerativeAI(config.gemini.apiKey);
-    } else {
-      console.warn('⚠️ GEMINI_API_KEY não definida no arquivo .env. O JASPER responderá no modo simulação/fallback offline.');
     }
-  }
-
-  private sanitizeHistory(history: any[]): any[] {
-    if (!Array.isArray(history) || history.length === 0) return [];
-    const valid: any[] = [];
-    let expectedRole = 'user';
-
-    for (const msg of history) {
-      if (msg && msg.role === expectedRole && Array.isArray(msg.parts) && msg.parts.length > 0) {
-        valid.push(msg);
-        expectedRole = expectedRole === 'user' ? 'model' : 'user';
-      }
-    }
-
-    // History must end with 'model' so current user prompt can be sent
-    if (valid.length % 2 !== 0) {
-      valid.pop();
-    }
-    return valid;
   }
 
   /**
-   * Processa uma solicitação conversacional do usuário utilizando o modelo Gemini
+   * Remove mensagens de tool/function do histórico para evitar conflito de validação de schemas do SDK
+   */
+  private sanitizeHistory(history: Array<{ role: string; content: string }>): Array<{ role: string; parts: Array<{ text: string }> }> {
+    return history
+      .filter((msg) => msg.role === 'user' || msg.role === 'model')
+      .map((msg) => ({
+        role: msg.role === 'model' ? 'model' : 'user',
+        parts: [{ text: msg.content }],
+      }));
+  }
+
+  /**
+   * Helper com timeout individual por chamada à API do Gemini
+   */
+  private withTimeout<T>(promise: Promise<T>, ms: number = 15000): Promise<T> {
+    let timer: NodeJS.Timeout;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`Gemini API timeout (${ms}ms)`)), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  }
+
+  /**
+   * Processa o comando textual do usuário com raciocínio e execução encadeada de ferramentas
    */
   public async generateResponse(
     userPrompt: string,
-    historyContext: any[] = []
+    historyContext: Array<{ role: string; content: string }> = []
   ): Promise<GeminiResponse> {
     const startTime = Date.now();
     const toolsExecuted: string[] = [];
+    const chartConfigs: string[] = [];
+    const imageConfigs: string[] = [];
 
     // Se não houver chave de API configurada, utiliza o modo simulação inteligente
     if (!this.genAI || !config.gemini.apiKey) {
@@ -72,7 +76,7 @@ export class GeminiBrain {
       const tzDate = new Date(now.toLocaleString("en-US", {timeZone: "America/Sao_Paulo"}));
       const isoStr = tzDate.getFullYear() + "-" + String(tzDate.getMonth()+1).padStart(2, '0') + "-" + String(tzDate.getDate()).padStart(2, '0') + " " + String(tzDate.getHours()).padStart(2, '0') + ":" + String(tzDate.getMinutes()).padStart(2, '0') + ":" + String(tzDate.getSeconds()).padStart(2, '0');
       
-      const timeContext = `\n[CONTEXTO DE TEMPO DA SESSÃO]\nO horário atual (no momento do carregamento desta mensagem) em Brasília é: ${fmtStr}.\n(Formato ISO: ${isoStr}).\nATENÇÃO: Você DEVE SEMPRE chamar a ferramenta 'consultarHorario' ANTES de agendar qualquer alarme para ter certeza absoluta da hora e do dia ATUAL e evitar atrasos!\n`;
+      const timeContext = `\n[CONTEXTO DE TEMPO DA SESSÃO]\nO horário atual em Brasília é: ${fmtStr}.\n(Formato ISO: ${isoStr}).\nATENÇÃO: Você DEVE SEMPRE chamar a ferramenta 'consultarHorario' ANTES de agendar qualquer alarme para ter certeza absoluta da hora e do dia ATUAL e evitar atrasos!\n`;
 
       const fullSystemInstruction = JASPER_SYSTEM_PROMPT + memorySummary + timeContext;
       const cleanHistory = this.sanitizeHistory(historyContext);
@@ -87,60 +91,78 @@ export class GeminiBrain {
         history: cleanHistory,
       });
 
-      // Race Gemini API against 3500ms timeout for instant offline fallback
-      const apiPromise = chat.sendMessage(userPrompt);
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Gemini API timeout (3500ms)')), 3500)
-      );
+      // Envia o prompt com timeout seguro de 15 segundos
+      const apiResult = await this.withTimeout(chat.sendMessage(userPrompt), 15000);
+      let currentResponse = await apiResult.response;
+      let finalResponseText = '';
+      let turns = 0;
 
-      const result = await Promise.race([apiPromise, timeoutPromise]);
-      const response = await result.response;
-      
-      const functionCalls = response.functionCalls();
+      // Loop de execução de ferramentas encadeadas (ex: pesquisar_web -> renderizar_grafico -> resposta)
+      while (turns < 5) {
+        const functionCalls = currentResponse.functionCalls();
+        if (!functionCalls || functionCalls.length === 0) {
+          try {
+            const txt = currentResponse.text();
+            if (txt) {
+              finalResponseText += (finalResponseText ? '\n\n' : '') + txt;
+            }
+          } catch (e) {}
+          break;
+        }
 
-      if (functionCalls && functionCalls.length > 0) {
-        let finalResponseText = '';
+        turns++;
+        const functionResponses = [];
 
         for (const fc of functionCalls) {
           toolsExecuted.push(fc.name);
-
-          // Executa a função localmente
           const toolResult = await executeToolByName(fc.name, fc.args as any);
 
-          // Envia o resultado de volta para o Gemini
-          const followUpPromise = chat.sendMessage([
-            {
-              functionResponse: {
-                name: fc.name,
-                response: toolResult,
-              },
+          if (fc.name === 'renderizar_grafico' && toolResult?.chartConfig) {
+            chartConfigs.push(toolResult.chartConfig);
+          } else if (fc.name === 'pesquisar_imagens' && toolResult?.images) {
+            imageConfigs.push(JSON.stringify(toolResult.images));
+          }
+
+          functionResponses.push({
+            functionResponse: {
+              name: fc.name,
+              response: toolResult,
             },
-          ]);
-          const followUp = await Promise.race([followUpPromise, timeoutPromise]);
-          const followUpResponse = await followUp.response;
-          finalResponseText += followUpResponse.text() || toolResult.message || 'Ação executada com sucesso.';
+          });
         }
 
-        return {
-          text: finalResponseText.trim(),
-          toolsExecuted,
-          durationMs: Date.now() - startTime,
-        };
+        // Devolve os resultados das ferramentas para o Gemini continuar o raciocínio
+        const followUpResult = await this.withTimeout(chat.sendMessage(functionResponses), 15000);
+        currentResponse = await followUpResult.response;
+      }
+
+      // Injeta blocos de gráficos se ainda não foram incluídos explicitamente no markdown
+      if (chartConfigs.length > 0 && !finalResponseText.includes('```recharts')) {
+        for (const cfg of chartConfigs) {
+          finalResponseText += `\n\n\`\`\`recharts\n${cfg}\n\`\`\`\n`;
+        }
+      }
+
+      // Injeta galeria de imagens se ainda não foi incluída
+      if (imageConfigs.length > 0 && !finalResponseText.includes('```images')) {
+        for (const imgCfg of imageConfigs) {
+          finalResponseText += `\n\n\`\`\`images\n${imgCfg}\n\`\`\`\n`;
+        }
       }
 
       return {
-        text: response.text()?.trim() || 'Desculpe, não consegui entender completamente.',
-        toolsExecuted: [],
+        text: finalResponseText.trim() || 'Comando processado com sucesso pelo JASPER.',
+        toolsExecuted,
         durationMs: Date.now() - startTime,
       };
     } catch (error: any) {
-      console.error('❌ Erro/Timeout na integração com o Gemini:', error.message);
+      console.error('❌ Erro na integração com o Gemini:', error.message);
       return this.fallbackResponse(userPrompt, startTime, error.message);
     }
   }
 
   /**
-   * Resposta de contingência offline/fallback quando a API do Gemini não está configurada ou falha
+   * Resposta de contingência offline/fallback quando a API do Gemini não está acessível
    */
   private async fallbackResponse(
     userPrompt: string,
@@ -151,57 +173,47 @@ export class GeminiBrain {
     let text = '';
     const toolsExecuted: string[] = [];
 
-    // Detecção de solicitação de código
     if (
       lower.includes('código') || lower.includes('codigo') ||
       lower.includes('python') || lower.includes('javascript') ||
-      lower.includes('html') || lower.includes('brainfuck') ||
-      lower.includes('função') || lower.includes('funcao') ||
-      lower.includes('exemplo de código') || lower.includes('script')
+      lower.includes('html') || lower.includes('função') || lower.includes('funcao')
     ) {
-      if (lower.includes('brainfuck')) {
-        text = `Com certeza! Aqui está um exemplo de código em **Brainfuck** que imprime 'Hello World!':\n\n\`\`\`brainfuck\n>++++++++[<+++++++++>-]<.  >++++[<+++++++>-]<+.  +++++++..  +++.  >>++++ logic...\n\`\`\`\n\nEste código utiliza manipulação direta de ponteiros de memória.`;
-      } else if (lower.includes('python')) {
-        text = `Com certeza! Aqui está um exemplo de código em **Python**:\n\n\`\`\`python\ndef calcular_fibonacci(n):\n    """Calcula a sequência de Fibonacci até o n-ésimo termo."""\n    a, b = 0, 1\n    resultado = []\n    for _ in range(n):\n        resultado.append(a)\n        a, b = b, a + b\n    return resultado\n\n# Exemplo de uso:\ntermo = 10\nprint(f"Os primeiros {termo} números de Fibonacci são: {calcular_fibonacci(termo)}")\n\`\`\`\n\nVocê pode executar este código diretamente em qualquer ambiente Python 3.`;
-      } else if (lower.includes('javascript') || lower.includes('js')) {
-        text = `Aqui está o código em **JavaScript** solicitado:\n\n\`\`\`javascript\nasync function buscarDados(url) {\n  try {\n    const response = await fetch(url);\n    const data = await response.json();\n    console.log('Dados recebidos:', data);\n    return data;\n  } catch (error) {\n    console.error('Erro na requisição:', error);\n  }\n}\n\n// Exemplo de chamada\nbuscarDados('https://api.github.com/users/octocat');\n\`\`\``;
-      } else if (lower.includes('html') || lower.includes('css')) {
-        text = `Aqui está uma estrutura moderna em **HTML & CSS**:\n\n\`\`\`html\n<div class="card-container">\n  <h2 class="card-title">JASPER AI Assistant</h2>\n  <p class="card-description">Sistema de inteligência artificial de alta performance.</p>\n  <button class="card-btn">Iniciar</button>\n</div>\n\n<style>\n.card-container {\n  background: rgba(15, 20, 28, 0.85);\n  border: 1px solid rgba(255, 255, 255, 0.1);\n  border-radius: 12px;\n  padding: 24px;\n  color: #fff;\n}\n</style>\n\`\`\``;
-      } else {
-        text = `Aqui está um exemplo prático de código:\n\n\`\`\`python\nimport time\n\ndef processar_tarefa(nome):\n    print(f"⚡ [JASPER] Processando tarefa: {nome}...")\n    time.sleep(0.5)\n    return {"status": "sucesso", "tarefa": nome}\n\nresultado = processar_tarefa("Automação de Sistema")\nprint("Resultado:", resultado)\n\`\`\``;
-      }
+      text = `Aqui está um exemplo de código:\n\n\`\`\`python\ndef processar():\n    print("⚡ [JASPER] Operação concluída com sucesso.")\nprocessar()\n\`\`\``;
     } else if (lower.includes('imagem') || lower.includes('foto') || lower.includes('buscar imagem')) {
-      const query = userPrompt.replace(/jasper|imagem|imagens|foto|fotos|buscar|pesquisar/gi, '').trim() || 'tecnologia futurista';
+      const query = userPrompt.replace(/jasper|imagem|imagens|foto|fotos|buscar|pesquisar/gi, '').trim() || 'tecnologia';
       const imgRes = await executeToolByName('pesquisar_imagens', { query });
       toolsExecuted.push('pesquisar_imagens');
       text = `🖼️ Busquei imagens sobre **"${query}"** para você.`;
-    } else if (lower.includes('pesquisar') || lower.includes('preço') || lower.includes('custando') || lower.includes('quanto custa') || lower.includes('dólar') || lower.includes('dolar')) {
-      const query = userPrompt.replace(/jasper|pesquisar|pesquisa|quanto custa|preço/gi, '').trim();
+      if (imgRes.images) {
+        text += `\n\n\`\`\`images\n${JSON.stringify(imgRes.images)}\n\`\`\``;
+      }
+    } else if (lower.includes('pesquisar') || lower.includes('eleição') || lower.includes('eleições') || lower.includes('notícia')) {
+      const query = userPrompt.replace(/jasper|pesquisar|pesquisa/gi, '').trim();
       const searchRes = await executeToolByName('pesquisar_web', { query });
       toolsExecuted.push('pesquisar_web');
-      text = `Pesquisei na internet sobre **"${query}"**. ${searchRes.message || ''}`;
+      text = `Pesquisei na internet sobre **"${query}"**:\n\n` +
+        (searchRes.results ? searchRes.results.slice(0, 4).map((r: any) => `• **${r.title}**: ${r.snippet}`).join('\n') : searchRes.message);
     } else if (lower.includes('gráfico') || lower.includes('grafico') || lower.includes('chart')) {
-      const chartRes = await executeToolByName('renderizar_grafico', {
+      const chartConfig = JSON.stringify({
         title: 'Métricas de Desempenho JASPER',
-        chartType: 'area',
+        type: 'area',
         data: [
-          { name: '00:00', cpu: 12, ram: 45, latencia: 8 },
-          { name: '04:00', cpu: 8, ram: 42, latencia: 6 },
-          { name: '08:00', cpu: 25, ram: 55, latencia: 12 },
-          { name: '12:00', cpu: 40, ram: 68, latencia: 15 },
-          { name: '16:00', cpu: 32, ram: 60, latencia: 10 },
-          { name: '20:00', cpu: 18, ram: 50, latencia: 9 },
+          { name: '00:00', cpu: 12, ram: 45 },
+          { name: '06:00', cpu: 18, ram: 50 },
+          { name: '12:00', cpu: 35, ram: 65 },
+          { name: '18:00', cpu: 28, ram: 58 },
+          { name: '22:00', cpu: 15, ram: 48 },
         ],
-        dataKeys: ['cpu', 'ram', 'latencia'],
+        xKey: 'name',
+        series: [
+          { dataKey: 'cpu', name: 'Uso de CPU (%)', color: '#38bdf8' },
+          { dataKey: 'ram', name: 'Uso de RAM (%)', color: '#818cf8' },
+        ],
       });
       toolsExecuted.push('renderizar_grafico');
-      text = `Gerando a visualização gráfica solicitada.\n\n\`\`\`recharts\n${chartRes.chartConfig}\n\`\`\``;
-    } else if (lower.includes('mensagem') || lower.includes('mande uma mensagem')) {
-      const msgRes = await executeToolByName('enviar_mensagem', { contato: 'Contato', mensagem: userPrompt });
-      toolsExecuted.push('enviar_mensagem');
-      text = msgRes.message;
+      text = `Aqui está a estrutura gráfica solicitada:\n\n\`\`\`recharts\n${chartConfig}\n\`\`\``;
     } else {
-      text = `Compreendido! Recebi sua mensagem: "${userPrompt}". Como posso ajudar com este tópico?`;
+      text = `Compreendido! Recebi sua mensagem: "${userPrompt}". O assistente JASPER está pronto.`;
     }
 
     return {

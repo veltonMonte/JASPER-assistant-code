@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-JASPER - Módulo Avançado de Pesquisa Web Real-Time (Google News RSS + Multi-Engine + Time API)
+JASPER - Módulo Avançado de Pesquisa Web Real-Time (Google News RSS + Multi-Engine + Parallel Worker)
 """
 
 import sys
@@ -9,8 +9,10 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 import re
+import html
 from datetime import datetime
 import zoneinfo
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 TIMEZONES = {
     'dubai': 'Asia/Dubai',
@@ -57,10 +59,29 @@ def obter_hora_cidade(cidade: str) -> str:
         return f"Erro ao calcular horário para {cidade}: {str(e)}"
 
 
+def limpar_query_pesquisa(query: str) -> str:
+    """Remove termos de comando e foca nas palavras-chave essenciais para o buscador."""
+    q = re.sub(
+        r'^(jasper|por favor|monte|crie|gere|desenhe|mostre|faça|faca|pesquise|busque|ache|encontre|quero ver|quero saber|me diga|me mostre)\s+',
+        '',
+        query,
+        flags=re.IGNORECASE
+    )
+    q = re.sub(
+        r'\b(um gráfico com as|um grafico com as|um gráfico sobre|um grafico sobre|um gráfico de|um grafico de|gráficos de|graficos de|gráfico|grafico|chart)\b',
+        '',
+        q,
+        flags=re.IGNORECASE
+    )
+    q = re.sub(r'\s+', ' ', q).strip()
+    return q if len(q) > 2 else query
+
+
 def pesquisar_ddg_lite(query: str, max_results: int = 6) -> list:
     """Busca orgânica no DuckDuckGo Lite para obter snippets e URLs reais sobre qualquer assunto."""
     try:
-        data = urllib.parse.urlencode({'q': query}).encode('utf-8')
+        clean_q = limpar_query_pesquisa(query)
+        data = urllib.parse.urlencode({'q': clean_q}).encode('utf-8')
         req = urllib.request.Request(
             'https://lite.duckduckgo.com/lite/',
             data=data,
@@ -83,7 +104,8 @@ def pesquisar_ddg_lite(query: str, max_results: int = 6) -> list:
                     valid_links.append((href, clean_t))
 
             results = []
-            for i in range(min(len(valid_links), len(snippets), max_results)):
+            limit = min(len(valid_links), len(snippets), max_results)
+            for i in range(limit):
                 url, title = valid_links[i]
                 snip = re.sub(r'<[^>]+>', '', html.unescape(snippets[i])).strip()
                 if snip and title:
@@ -93,40 +115,19 @@ def pesquisar_ddg_lite(query: str, max_results: int = 6) -> list:
                         'url': url
                     })
             return results
-    except Exception:
-        return []
-
-
-def pesquisar_wikipedia(query: str, max_results: int = 3) -> list:
-    """Busca resumos conceituais na Wikipédia em Português para definições e biografias."""
-    try:
-        url = f"https://pt.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(query)}&utf8=&format=json"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
-        with urllib.request.urlopen(req, timeout=4) as resp:
-            data = json.loads(resp.read().decode('utf-8'))
-            search_items = data.get('query', {}).get('search', [])
-            results = []
-            for item in search_items[:max_results]:
-                title = item.get('title', '')
-                snippet = re.sub(r'<[^>]+>', '', item.get('snippet', ''))
-                page_url = f"https://pt.wikipedia.org/wiki/{urllib.parse.quote(title)}"
-                if title and snippet:
-                    results.append({
-                        'titulo': f"Wikipédia - {title}",
-                        'resumo': f"Definição (Wikipédia): {title} - {snippet}...",
-                        'url': page_url
-                    })
-            return results
-    except Exception:
+    except Exception as e:
         return []
 
 
 def pesquisar_google_news(query: str, max_results: int = 6) -> list:
     """Busca em tempo real via Google News RSS API."""
     try:
-        url = f"https://news.google.com/rss/search?q={urllib.parse.quote(query)}&hl=pt-BR&gl=BR&ceid=BR:pt-419"
-        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
-        with urllib.request.urlopen(req, timeout=4) as response:
+        clean_q = limpar_query_pesquisa(query)
+        url = f"https://news.google.com/rss/search?q={urllib.parse.quote(clean_q)}&hl=pt-BR&gl=BR&ceid=BR:pt-419"
+        req = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36'
+        })
+        with urllib.request.urlopen(req, timeout=5) as response:
             xml_data = response.read()
             root = ET.fromstring(xml_data)
             
@@ -143,8 +144,33 @@ def pesquisar_google_news(query: str, max_results: int = 6) -> list:
                 if title_text:
                     results.append({
                         'titulo': title_text,
-                        'resumo': f"{title_text} (Notícia de {date_text})",
+                        'resumo': f"{title_text} (Notícia: {date_text})",
                         'url': url_text
+                    })
+            return results
+    except Exception:
+        return []
+
+
+def pesquisar_wikipedia(query: str, max_results: int = 3) -> list:
+    """Busca resumos conceituais na Wikipédia em Português para definições e biografias."""
+    try:
+        clean_q = limpar_query_pesquisa(query)
+        url = f"https://pt.wikipedia.org/w/api.php?action=query&list=search&srsearch={urllib.parse.quote(clean_q)}&utf8=&format=json"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'})
+        with urllib.request.urlopen(req, timeout=4) as resp:
+            data = json.loads(resp.read().decode('utf-8'))
+            search_items = data.get('query', {}).get('search', [])
+            results = []
+            for item in search_items[:max_results]:
+                title = item.get('title', '')
+                snippet = re.sub(r'<[^>]+>', '', item.get('snippet', ''))
+                page_url = f"https://pt.wikipedia.org/wiki/{urllib.parse.quote(title)}"
+                if title and snippet:
+                    results.append({
+                        'titulo': f"Wikipédia - {title}",
+                        'resumo': f"Definição (Wikipédia): {title} - {snippet}...",
+                        'url': page_url
                     })
             return results
     except Exception:
@@ -180,7 +206,7 @@ def pesquisar_imagens(query: str, max_results: int = 8) -> list:
                     'thumbnail': thumb_url,
                     'url': source_url
                 })
-    except Exception as e:
+    except Exception:
         pass
 
     # Fallback Wikimedia se nenhuma imagem foi encontrada
@@ -210,48 +236,61 @@ def pesquisar_imagens(query: str, max_results: int = 8) -> list:
 
 
 def pesquisar_web(query: str) -> list:
-    """Combina DuckDuckGo Lite, Wikipédia e Google News para garantir respostas coerentes e atualizadas."""
+    """
+    Executa busca em paralelo (DuckDuckGo Lite + Google News + Wikipédia)
+    para máxima velocidade e riqueza de informações.
+    """
+    query_lower = query.lower()
+    is_news = any(w in query_lower for w in [
+        'pesquisa', 'pesquisas', 'eleição', 'eleições', 'eleitoral', 'segundo turno',
+        '2º turno', 'voto', 'votos', 'hoje', 'notícia', 'noticias', 'jogo', 'últimas',
+        'placar', 'ao vivo', 'cotação', 'resultado', 'governo', 'presidente', 'prefeito'
+    ])
+
     results = []
 
-    # 1. Pesquisa web orgânica (DuckDuckGo Lite) - Traz snippets e dados reais
-    ddg_results = pesquisar_ddg_lite(query, max_results=5)
-    if ddg_results:
-        results.extend(ddg_results)
+    # Executa os motores em paralelo usando ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        futures = {
+            executor.submit(pesquisar_ddg_lite, query, 6): 'ddg',
+            executor.submit(pesquisar_google_news, query, 6): 'news'
+        }
+        
+        # Se for conceito/definição ou se não for estritamente notícia, inclui Wikipédia
+        is_definition = any(w in query_lower for w in ['o que é', 'quem é', 'quem foi', 'história', 'definição', 'significado'])
+        if is_definition or not is_news:
+            futures[executor.submit(pesquisar_wikipedia, query, 3)] = 'wiki'
 
-    # 2. Se a busca envolve definições, história ou conceitos, busca na Wikipédia
-    query_lower = query.lower()
-    is_definition = any(w in query_lower for w in ['o que é', 'quem é', 'quem foi', 'história', 'definição', 'como funciona', 'significado'])
-    if is_definition or len(results) < 3:
-        wiki_results = pesquisar_wikipedia(query, max_results=2)
-        results.extend(wiki_results)
+        for future in as_completed(futures):
+            try:
+                res = future.result()
+                if res:
+                    results.extend(res)
+            except Exception:
+                pass
 
-    # 3. Notícias recentes
-    is_news = any(w in query_lower for w in ['hoje', 'notícia', 'jogo', 'últimas', 'placar', 'ao vivo', 'cotação', 'resultado'])
-    if is_news or len(results) < 2:
-        news_results = pesquisar_google_news(query, max_results=4)
-        results.extend(news_results)
-
-    # Deduplicação por título/URL
+    # Deduplicação por título normalizado
     seen_titles = set()
     unique_results = []
     for r in results:
-        t_clean = r['titulo'].lower().strip()
-        if t_clean not in seen_titles:
+        t_clean = re.sub(r'[^a-zA-Z0-9]', '', r['titulo'].lower())
+        if t_clean and t_clean not in seen_titles:
             seen_titles.add(t_clean)
             unique_results.append(r)
 
+    # Fallback se nada foi encontrado
     if not unique_results:
+        clean_q = limpar_query_pesquisa(query)
         unique_results.append({
-            'titulo': f'Resultado da Pesquisa: {query}',
-            'resumo': f'Busca para "{query}" realizada na internet na data de hoje ({datetime.now().strftime("%d/%m/%Y")}).',
-            'url': f'https://duckduckgo.com/?q={urllib.parse.quote(query)}'
+            'titulo': f'Pesquisa na Web: {clean_q}',
+            'resumo': f'Busca para "{clean_q}" realizada na data de {datetime.now().strftime("%d/%m/%Y")}.',
+            'url': f'https://duckduckgo.com/?q={urllib.parse.quote(clean_q)}'
         })
 
     return unique_results
 
 
 def main():
-    import html
     args = sys.argv[1:]
     
     if not args:
@@ -298,4 +337,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

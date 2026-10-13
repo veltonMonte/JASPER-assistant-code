@@ -4,20 +4,114 @@ import { wakeWordManager } from '../voice/wakeword.js';
 import { GeminiLiveSession } from '../ai/gemini-live.js';
 import { jasperAgent } from '../agent/agent.js';
 import { vadManager } from '../voice/vad.js';
+import { toolEvents } from '../events/toolEvents.js';
 
 export class JasperWebSocketServer {
   private wss: WebSocketServer | null = null;
   private geminiLive: GeminiLiveSession | null = null;
+  private pendingTerminalApprovalId: string | null = null;
+  private activeClient: WebSocket | null = null;
 
   public init(server: Server): void {
     this.wss = new WebSocketServer({ server, path: '/ws' });
 
     console.log('📡 Servidor WebSocket inicializado no endpoint /ws');
 
+    // Subscribe to tool events
+    toolEvents.on('request_terminal_approval', (payload: { id: string; command: string; riskLevel?: string }) => {
+      this.pendingTerminalApprovalId = payload.id;
+      this.broadcastToClients({
+        type: 'TERMINAL_APPROVAL_REQUEST',
+        id: payload.id,
+        command: payload.command,
+        riskLevel: payload.riskLevel || 'medium',
+      });
+    });
+
+    vadManager.on('silence_detected', () => {
+      if (this.geminiLive && this.geminiLive.isLiveConnected()) {
+        console.log('🔇 [WebSocket] Silêncio detectado pelo VAD, aguardando Gemini processar.');
+        this.geminiLive.forceTurnComplete();
+        wakeWordManager.setState('PROCESSING');
+        this.broadcastState('PROCESSING');
+      }
+    });
+
+    toolEvents.on('pipeline_action_start', (payload: { tool: string; args?: any }) => {
+      let actionText = `Executando ${payload.tool}...`;
+      if (payload.tool === 'pesquisar_web') actionText = `Pesquisando na web: "${payload.args?.query || ''}"`;
+      else if (payload.tool === 'pesquisar_imagens') actionText = `🖼️ Buscando imagens na web: "${payload.args?.query || ''}"`;
+      else if (payload.tool === 'acessar_site') actionText = `Lendo site: "${payload.args?.url || ''}"`;
+      else if (payload.tool === 'executar_terminal') actionText = `Executando comando no terminal: "${payload.args?.comando || ''}"`;
+      else if (payload.tool === 'renderizar_grafico') actionText = `Gerando estrutura de gráfico Recharts`;
+      else if (payload.tool === 'salvar_memoria') actionText = `Registrando memória: "${payload.args?.chave || ''}"`;
+      else if (payload.tool === 'buscar_memoria') actionText = `Buscando memórias gravadas`;
+      else if (payload.tool === 'toggle_device') actionText = `Alterando dispositivo "${payload.args?.deviceName}" para ${payload.args?.state}`;
+
+      this.broadcastToClients({
+        type: 'PIPELINE_ACTION',
+        action: actionText,
+        status: 'running',
+        tool: payload.tool,
+        args: payload.args,
+      });
+    });
+
+    toolEvents.on('pipeline_action_end', (payload: { tool: string; durationMs: number; success: boolean; args?: any; result?: any }) => {
+      let actionText = `Concluído: ${payload.tool}`;
+      if (payload.tool === 'pesquisar_web') actionText = `Pesquisa concluída (${payload.durationMs}ms)`;
+      else if (payload.tool === 'pesquisar_imagens') actionText = `Galeria de imagens pronta (${payload.durationMs}ms)`;
+      else if (payload.tool === 'acessar_site') actionText = `Página analisada com sucesso`;
+      else if (payload.tool === 'executar_terminal') actionText = `Comando finalizado no terminal: "${payload.args?.comando || ''}"`;
+      else if (payload.tool === 'renderizar_grafico') actionText = `Gráfico renderizado`;
+      else if (payload.tool === 'renderizar_video') actionText = `Reprodutor de vídeo exibido`;
+      else if (payload.tool === 'salvar_memoria') actionText = `Memória persistida no banco`;
+
+      this.broadcastToClients({
+        type: 'PIPELINE_ACTION',
+        action: actionText,
+        status: payload.success ? 'done' : 'error',
+        tool: payload.tool,
+        durationMs: payload.durationMs,
+        command: payload.args?.comando,
+        output: payload.result?.output || payload.result?.message,
+        error: payload.result?.error,
+      });
+
+      if (payload.tool === 'pesquisar_imagens' && payload.success && payload.result?.images?.length > 0) {
+        this.broadcastToClients({
+          type: 'LIVE_TEXT_CHUNK',
+          text: `\n\`\`\`images\n${JSON.stringify({ query: payload.result.query, images: payload.result.images })}\n\`\`\`\n`
+        });
+      }
+
+      if (payload.tool === 'renderizar_video' && payload.success && payload.result?.url) {
+        this.broadcastToClients({
+          type: 'LIVE_TEXT_CHUNK',
+          text: `\n\`\`\`video\n${JSON.stringify({ url: payload.result.url })}\n\`\`\`\n`
+        });
+      }
+
+      if (payload.tool === 'executar_terminal' && payload.success) {
+        const cmd = payload.args?.comando || '';
+        const out = payload.result?.output || payload.result?.message || '';
+        if (cmd || out) {
+          this.broadcastToClients({
+            type: 'LIVE_TEXT_CHUNK',
+            text: `\n\`\`\`bash\n$ ${cmd}\n${out}\n\`\`\`\n`
+          });
+        }
+      }
+    });
+
     this.initGeminiLiveSession();
 
     this.wss.on('connection', (ws: WebSocket) => {
       console.log('📱 Cliente conectado ao WebSocket.');
+
+      // Reseta o estado global para IDLE sempre que um novo cliente conectar
+      // Isso evita que o servidor fique travado em PROCESSING/SPEAKING se uma conexão anterior cair.
+      wakeWordManager.setState('IDLE');
 
       this.sendState(ws, wakeWordManager.getState());
 
@@ -28,7 +122,9 @@ export class JasperWebSocketServer {
 
       ws.on('message', async (data: Buffer | string, isBinary: boolean) => {
         if (isBinary || (Buffer.isBuffer(data) && data[0] !== 123)) {
-          const base64Pcm = data.toString('base64');
+          const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as string);
+          console.log(`🎙️ [MOBILE] Áudio binário recebido: ${buf.length} bytes | isBinary=${isBinary} | GeminiLive=${!!this.geminiLive} | GeminiConnected=${this.geminiLive?.isLiveConnected() || false}`);
+          const base64Pcm = buf.toString('base64');
           
           const isSpeaking = wakeWordManager.getState() === 'SPEAKING';
           const wasInterrupted = vadManager.onUserAudioReceived(isSpeaking);
@@ -45,6 +141,8 @@ export class JasperWebSocketServer {
 
           if (this.geminiLive) {
             this.geminiLive.sendAudioChunk(base64Pcm, 16000);
+          } else {
+            console.warn('⚠️ [MOBILE] GeminiLive NÃO está conectado! Áudio descartado.');
           }
           return;
         }
@@ -52,6 +150,14 @@ export class JasperWebSocketServer {
         try {
           const textData = data.toString();
           const payload = JSON.parse(textData);
+          console.log(`📨 [MSG] type=${payload.type} | keys=${Object.keys(payload).join(',')}`);
+          
+          // Tratar mensagem "setup" do APK nativo (ignorar, já configuramos no server)
+          if (payload.type === 'setup') {
+            console.log('📱 [MOBILE] Mensagem de setup recebida do APK nativo (ignorada, já configurado).');
+            return;
+          }
+          
           await this.handleClientMessage(ws, payload);
         } catch (error: any) {
           console.error('❌ Erro ao ler mensagem WebSocket:', error.message);
@@ -96,8 +202,14 @@ export class JasperWebSocketServer {
       'prevent me from',
       'ambiguity of',
       'locating information',
+      'locating information',
       'initiating search',
-      'outlining'
+      'outlining',
+      'addressing the timeout',
+      're-testing terminal access',
+      'testing terminal',
+      'addressing',
+      'test execution'
     ];
 
     if (thinkingKeywords.some(kw => l.includes(kw))) {
@@ -138,9 +250,7 @@ export class JasperWebSocketServer {
 
   private cleanTextMonologue(text: string): string {
     if (!text) return '';
-    const lines = text.split('\n');
-    const cleanLines = lines.filter(line => !this.isThinkingLine(line));
-    return cleanLines.join('\n').trimStart();
+    return text.replace(/<think>[\s\S]*?<\/think>/gi, '').trimStart();
   }
 
   private async initGeminiLiveSession(): Promise<void> {
@@ -213,6 +323,13 @@ export class JasperWebSocketServer {
             text: `\n\`\`\`recharts\n${data.result.chartConfig}\n\`\`\`\n`
           });
         }
+
+        if (data.name === 'renderizar_video' && !data.error && data.result?.url) {
+          this.broadcastToClients({
+            type: 'LIVE_TEXT_CHUNK',
+            text: `\n\`\`\`video\n${JSON.stringify({ url: data.result.url })}\n\`\`\`\n`
+          });
+        }
       });
 
       this.geminiLive.on('interrupted', () => {
@@ -254,6 +371,9 @@ export class JasperWebSocketServer {
 
   private async handleClientMessage(ws: WebSocket, payload: any): Promise<void> {
     const { type, base64Pcm, text, audioBase64 } = payload;
+    
+    // O cliente que enviou a mensagem se torna o cliente ativo
+    this.activeClient = ws;
 
     switch (type) {
       case 'PCM_AUDIO_CHUNK': {
@@ -267,13 +387,27 @@ export class JasperWebSocketServer {
           this.broadcastToClients({ type: 'INTERRUPT' });
         }
 
-        if (wakeWordManager.getState() !== 'LISTENING') {
+        if (wakeWordManager.getState() === 'IDLE') {
           wakeWordManager.setState('LISTENING');
           this.broadcastState('LISTENING');
         }
 
-        if (this.geminiLive) {
+        // Analisa a energia do áudio para controle de estado local e barge-in
+        vadManager.processAudioEnergy(base64Pcm);
+
+        if (this.geminiLive && this.geminiLive.isLiveConnected()) {
           this.geminiLive.sendAudioChunk(base64Pcm, 16000);
+        }
+        break;
+      }
+
+      case 'SPEECH_ENDED': {
+        console.log('🔇 [WebSocket] SPEECH_ENDED recebido do APK Nativo. Aguardando Gemini VAD processar silêncio.');
+        vadManager.reset();
+        if (this.geminiLive && this.geminiLive.isLiveConnected()) {
+          this.geminiLive.forceTurnComplete();
+          wakeWordManager.setState('PROCESSING');
+          this.broadcastState('PROCESSING');
         }
         break;
       }
@@ -294,27 +428,74 @@ export class JasperWebSocketServer {
         break;
       }
 
+      case 'TERMINAL_APPROVAL_RESPONSE': {
+        const { id, approved, customCommand, remember } = payload;
+        if (id === this.pendingTerminalApprovalId) {
+          this.pendingTerminalApprovalId = null;
+        }
+        toolEvents.emit(`terminal_approval_response_${id}`, { approved, customCommand, remember });
+        this.broadcastToClients({
+          type: 'TERMINAL_APPROVAL_STATUS_UPDATE',
+          id,
+          approved,
+          customCommand,
+          remember,
+        });
+        break;
+      }
+
+      case 'MOBILE_LOG':
+        if (text) console.log(`📱 [MOBILE_LOG] ${text}`);
+        break;
+
       case 'TEXT_COMMAND':
       case 'VOICE_COMMAND': {
         if (!text) return;
         console.log(`💬 Comando recebido: "${text}"`);
 
-        wakeWordManager.setState('PROCESSING');
-        this.broadcastState('PROCESSING');
+        const lowerText = text.toLowerCase().trim();
+        
+        // Dynamic voice/text approval recognition for pending requests
+        if (this.pendingTerminalApprovalId) {
+          const isAffirmative = isAffirmativeApproval(lowerText);
+          const isNegative = isNegativeDenial(lowerText);
 
-        const liveSent = this.geminiLive?.isLiveConnected()
-          ? this.geminiLive.sendTextPrompt(text)
-          : false;
+          if (isAffirmative) {
+            console.log(`[Terminal] Comando aprovado por voz/texto: "${text}"`);
+            const approvalId = this.pendingTerminalApprovalId;
+            this.pendingTerminalApprovalId = null;
+            toolEvents.emit(`terminal_approval_response_${approvalId}`, { approved: true });
+            this.broadcastToClients({
+              type: 'TERMINAL_APPROVAL_STATUS_UPDATE',
+              id: approvalId,
+              approved: true,
+            });
+            return; // Consume turn
+          }
 
-        const lowerText = text.toLowerCase();
-        const needsCodeOrDetail = lowerText.includes('código') || lowerText.includes('codigo') ||
-                                  lowerText.includes('python') || lowerText.includes('javascript') ||
-                                  lowerText.includes('script') || lowerText.includes('html') ||
-                                  lowerText.includes('função') || lowerText.includes('pesquis') ||
-                                  lowerText.includes('fortaleza') || lowerText.includes('gráfico') ||
-                                  lowerText.includes('grafico');
+          if (isNegative) {
+            console.log(`[Terminal] Comando negado por voz/texto: "${text}"`);
+            const approvalId = this.pendingTerminalApprovalId;
+            this.pendingTerminalApprovalId = null;
+            toolEvents.emit(`terminal_approval_response_${approvalId}`, { approved: false });
+            this.broadcastToClients({
+              type: 'TERMINAL_APPROVAL_STATUS_UPDATE',
+              id: approvalId,
+              approved: false,
+            });
+            return; // Consume turn
+          }
+        }
 
-        if (!liveSent || needsCodeOrDetail) {
+        if (this.geminiLive && this.geminiLive.isLiveConnected()) {
+          console.log(`[WebSocket] Roteando comando de texto para Gemini Live: "${text}"`);
+          this.geminiLive.sendTextPrompt(text);
+          wakeWordManager.setState('PROCESSING');
+          this.broadcastState('PROCESSING');
+        } else {
+          console.log(`[WebSocket] Gemini Live indisponível, usando fallback de texto: "${text}"`);
+          wakeWordManager.setState('PROCESSING');
+          this.broadcastState('PROCESSING');
           await this.processTextFallback(ws, text);
         }
         break;
@@ -322,6 +503,10 @@ export class JasperWebSocketServer {
 
       case 'USER_INTERRUPT': {
         console.log('🛑 Usuário solicitou interrupção.');
+        if (this.pendingTerminalApprovalId) {
+          toolEvents.emit(`terminal_approval_response_${this.pendingTerminalApprovalId}`, { approved: false });
+          this.pendingTerminalApprovalId = null;
+        }
         wakeWordManager.setState('IDLE');
         this.broadcastState('IDLE');
         this.broadcastToClients({ type: 'INTERRUPT' });
@@ -372,7 +557,12 @@ export class JasperWebSocketServer {
       const sttRes = await sttHandler.transcribeAudio(audioBase64);
       const commandText = sttRes.text || 'JASPER, que horas são?';
 
-      await this.processTextFallback(ws, commandText);
+      if (this.geminiLive && this.geminiLive.isLiveConnected()) {
+        console.log(`[WebSocket] Roteando Blob de áudio transcrito para Gemini Live: "${commandText}"`);
+        this.geminiLive.sendTextPrompt(commandText);
+      } else {
+        await this.processTextFallback(ws, commandText);
+      }
     } catch (err: any) {
       console.error('❌ Erro no processamento de áudio fallback:', err.message);
       wakeWordManager.setState('IDLE');
@@ -396,7 +586,7 @@ export class JasperWebSocketServer {
     }
   }
 
-  private broadcastToClients(payload: any): void {
+  public broadcastToClients(payload: any): void {
     if (!this.wss) return;
     const json = JSON.stringify(payload);
     this.wss.clients.forEach((client) => {
@@ -405,6 +595,59 @@ export class JasperWebSocketServer {
       }
     });
   }
+
+  public sendToActiveClient(payload: any): void {
+    if (this.activeClient && this.activeClient.readyState === WebSocket.OPEN) {
+      this.activeClient.send(JSON.stringify(payload));
+    } else {
+      // Fallback: se não tiver activeClient, faz broadcast
+      this.broadcastToClients(payload);
+    }
+  }
 }
 
 export const jasperWsServer = new JasperWebSocketServer();
+
+function isAffirmativeApproval(text: string): boolean {
+  const clean = text.toLowerCase().trim().replace(/[.,!?;:]/g, '');
+  
+  const exactAffirmatives = [
+    'sim', 's', 'y', 'yes', 'ok', 'pode', 'pode rodar', 'pode executar',
+    'manda ver', 'executa', 'executar', 'autorizado', 'aprovar', 'aprovo',
+    'confirmo', 'confirmado', 'vai em frente', 'pode ser', 'positivo',
+    'claro', 'bora', 'com certeza', 'autorizo', 'vai', 'manda', 'faça isso',
+    'mandar bala', 'roda aí', 'manda ver jasper', 'vai lá', 'dale',
+    'de acordo', 'permito', 'permitido', 'aceito', 'pode fazer', 'faz aí', 'faz isso'
+  ];
+  
+  if (exactAffirmatives.includes(clean)) return true;
+
+  const phraseTriggers = [
+    'pode rodar', 'pode executar', 'pode fazer', 'manda ver', 'pode ir',
+    'está autorizado', 'esta autorizado', 'comando aprovado', 'pode dar o comando',
+    'pode dar enter', 'executa aí', 'executa ai', 'roda o comando', 'manda bala',
+    'vai em frente', 'pode dar segmento', 'com certeza pode', 'claro que sim'
+  ];
+  
+  return phraseTriggers.some(trigger => clean.includes(trigger));
+}
+
+function isNegativeDenial(text: string): boolean {
+  const clean = text.toLowerCase().trim().replace(/[.,!?;:]/g, '');
+  
+  const exactNegatives = [
+    'não', 'nao', 'n', 'no', 'negar', 'cancelar', 'recusar', 'parar',
+    'aborta', 'abortar', 'nem pensar', 'esquece', 'cancela', 'não pode',
+    'nao pode', 'negado', 'recusado', 'pare', 'parar', 'não autorizo'
+  ];
+
+  if (exactNegatives.includes(clean)) return true;
+
+  const phraseTriggers = [
+    'não rode', 'nao rode', 'não execute', 'nao execute', 'não faça',
+    'nao faça', 'cancela isso', 'não autorizo', 'nao autorizo', 'parar execução',
+    'de jeito nenhum', 'de forma alguma', 'deixa para lá', 'deixa pra lá'
+  ];
+
+  return phraseTriggers.some(trigger => clean.includes(trigger));
+}

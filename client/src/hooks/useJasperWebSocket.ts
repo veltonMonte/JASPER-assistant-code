@@ -2,9 +2,18 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 
 export interface ChatMessage {
   id: string;
-  sender: 'user' | 'assistant' | 'system' | 'action';
+  sender: 'user' | 'assistant' | 'system' | 'action' | 'terminal_approval';
   text: string;
   actionStatus?: 'running' | 'done' | 'error';
+  command?: string;
+  riskLevel?: 'safe' | 'medium' | 'high';
+  approvalStatus?: 'pending' | 'approved' | 'denied' | 'edited';
+  executedCommand?: string;
+  remember?: boolean;
+  tool?: string;
+  durationMs?: number;
+  output?: string;
+  error?: string;
 }
 
 export type JasperState = 'IDLE' | 'LISTENING' | 'PROCESSING' | 'SPEAKING' | 'ERROR';
@@ -15,8 +24,11 @@ export interface UseJasperReturn {
   messages: ChatMessage[];
   transcript: string;
   sendText: (text: string) => void;
+  sendTerminalApproval: (id: string, approved: boolean, customCommand?: string, remember?: boolean) => void;
   toggleMic: () => void;
   getAudioLevel: () => number;
+  activeAlarm: { id: string, message: string } | null;
+  stopAlarm: () => void;
 }
 
 function isThinkingLine(line: string): boolean {
@@ -29,7 +41,8 @@ function isThinkingLine(line: string): boolean {
     'i will follow', "i'll follow", 'standard offer', 'outlining response', 'assistant persona',
     'the user wants', 'the user is', 'user actually wants', 'narrow down the scope',
     'allow me to move forward', 'taking action', 'prevent me from', 'ambiguity of',
-    'locating information', 'initiating search', 'outlining', 'constructing', 'defining', 'generating'
+    'locating information', 'initiating search', 'outlining', 'constructing', 'defining', 'generating',
+    'addressing the timeout', 're-testing terminal access', 'testing terminal', 'addressing', 'test execution'
   ];
 
   if (thinkingKeywords.some(kw => l.includes(kw))) {
@@ -70,9 +83,64 @@ function isThinkingLine(line: string): boolean {
 
 function cleanTextMonologue(text: string): string {
   if (!text) return '';
-  const lines = text.split('\n');
-  const cleanLines = lines.filter(line => !isThinkingLine(line));
-  return cleanLines.join('\n').trimStart();
+  let cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
+  
+  // Remove markdown blocks that are leaked tool calls or raw arguments
+  cleaned = cleaned.replace(/```[a-z]*\n[\s\S]*?\n```/gi, (match) => {
+    if (match.includes('pesquisar_web') || match.includes('acessar_site') || match.includes('ligar_pc') || match.includes('renderizar_grafico')) {
+      return '';
+    }
+    if (match.match(/```[a-z]*\n\s*"[^"]+"\s*\n```/)) {
+        return '';
+    }
+    return match;
+  });
+
+  const lines = cleaned.split('\n');
+  const finalLines = [];
+  
+  const englishCommon = new Set([
+    'the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'i', 'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at',
+    'this', 'but', 'his', 'by', 'from', 'they', 'we', 'say', 'her', 'she', 'or', 'an', 'will', 'my', 'one', 'all', 'would', 'there',
+    'their', 'what', 'so', 'up', 'out', 'if', 'about', 'who', 'get', 'which', 'go', 'me', 'when', 'make', 'can', 'like', 'time', 'no',
+    'just', 'him', 'know', 'take', 'people', 'into', 'year', 'your', 'good', 'some', 'could', 'them', 'see', 'other', 'than', 'then',
+    'now', 'look', 'only', 'come', 'its', 'over', 'think', 'also', 'back', 'after', 'use', 'two', 'how', 'our', 'work', 'first',
+    'well', 'way', 'even', 'new', 'want', 'because', 'any', 'these', 'give', 'day', 'most', 'us', 'user', 'request', 'focus',
+    'action', 'context', 'specifics', 'topic', 'scope', 'clarifying', 'tool', 'task', 'query', 'string', 'details', 'choice', 'optimal',
+    'built', 'combining', 'execute', 'uncover', 'information', 'hopefully', 'confirming', 'denying', 'specific', 'release', 'date', 'assumption',
+    'refining', 'parameters', 'zeroing', 'movie', 'given', 'initial', 'refined', 'recognizing', 'data', 'imminent', 'check', 'pinpointing', 'pre-sale', 'determined'
+  ]);
+
+  for (const line of lines) {
+    const l = line.toLowerCase().trim();
+    if (!l) {
+      finalLines.push(line);
+      continue;
+    }
+    
+    // Ignore stray punctuation left over from removed markdown
+    if (l.length < 3 && l.match(/^[. ,!?;]+$/)) continue;
+
+    const words = l.match(/[a-z]+/g) || [];
+    let engCount = 0;
+
+    for (const w of words) {
+      if (englishCommon.has(w)) engCount++;
+    }
+
+    // If it's heavily English, it's a leaked thought, skip it
+    if (engCount >= 2 && engCount >= words.length * 0.3) {
+      continue;
+    }
+    
+    if (l.includes('tool is') || l.includes("i've determined") || l.includes('now, i will')) {
+        continue;
+    }
+
+    finalLines.push(line);
+  }
+
+  return finalLines.join('\n').trimStart();
 }
 
 function base64ToFloat32Array(base64: string): Float32Array {
@@ -109,6 +177,7 @@ export function useJasperWebSocket(): UseJasperReturn {
   const [isConnected, setIsConnected] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [transcript, setTranscript] = useState('');
+  const [activeAlarm, setActiveAlarm] = useState<{ id: string, message: string } | null>(null);
   
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -116,6 +185,7 @@ export function useJasperWebSocket(): UseJasperReturn {
   
   // Audio Playback
   const audioContextRef = useRef<AudioContext | null>(null);
+  const activeAlarmAudioRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
   const currentMessageIdRef = useRef<string | null>(null);
@@ -175,7 +245,125 @@ export function useJasperWebSocket(): UseJasperReturn {
     }
     analyserRef.current = null;
     nextPlayTimeRef.current = 0;
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
   }, []);
+
+  const stopAlarm = useCallback(() => {
+    if (activeAlarmAudioRef.current) {
+      activeAlarmAudioRef.current.close();
+      activeAlarmAudioRef.current = null;
+    }
+    setActiveAlarm(null);
+  }, []);
+
+  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    const updateVoices = () => {
+      const vList = window.speechSynthesis.getVoices();
+      if (vList && vList.length > 0) {
+        setAvailableVoices(vList);
+      }
+    };
+    updateVoices();
+    window.speechSynthesis.onvoiceschanged = updateVoices;
+  }, []);
+
+  const speakText = useCallback((text: string) => {
+    if (typeof window === 'undefined') return;
+
+    let speechContent = text
+      .replace(/```[\s\S]*?```/g, 'Aqui está o código gerado.')
+      .replace(/`([^`]+)`/g, '$1')
+      .replace(/<think>[\s\S]*?<\/think>/gi, '')
+      .replace(/[*#_~]/g, '')
+      .trim();
+
+    if (!speechContent) return;
+
+    // Check available high-quality voices
+    const voices = availableVoices.length > 0 ? availableVoices : (window.speechSynthesis?.getVoices() || []);
+    const ptVoices = voices.filter(v => v.lang.startsWith('pt') || v.lang.includes('BR'));
+    
+    const naturalVoice = ptVoices.find(v => {
+      const name = v.name.toLowerCase();
+      return (name.includes('google') || name.includes('natural') || name.includes('neural') || name.includes('online') || name.includes('helena') || name.includes('luciana') || name.includes('francisca') || name.includes('antonio'));
+    });
+
+    const isOnlyRoboticEspeak = ptVoices.length > 0 && ptVoices.every(v => v.name.toLowerCase().includes('espeak'));
+
+    // If no natural voice is found, or only eSpeak is available, use Google TTS Audio Fallback!
+    if (!naturalVoice || isOnlyRoboticEspeak) {
+      console.log('🤖 Apenas vozes robóticas locais detectadas (eSpeak). Utilizando Google TTS Cloud de alta qualidade.');
+      
+      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+      setState('SPEAKING');
+
+      // Split text into safe chunks for Google Translate TTS (<200 chars per chunk, splitting on punctuation or spaces)
+      const sentences = speechContent.match(/[^.!?]+[.!?]*|.{1,150}(?:\s|$)/g) || [speechContent];
+      let currentIdx = 0;
+
+      const playNextTTSChunk = () => {
+        if (currentIdx >= sentences.length) {
+          setState('IDLE');
+          return;
+        }
+        
+        const chunk = sentences[currentIdx].trim();
+        if (!chunk) {
+          currentIdx++;
+          playNextTTSChunk();
+          return;
+        }
+
+        const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(chunk)}&tl=pt-BR&client=tw-ob`;
+        const audio = new Audio(url);
+        
+        audio.onended = () => {
+          currentIdx++;
+          playNextTTSChunk();
+        };
+        
+        audio.onerror = () => {
+          console.warn('Google TTS falhou, tentando o próximo chunk...');
+          currentIdx++;
+          playNextTTSChunk();
+        };
+
+        audio.play().catch(err => {
+          console.warn('Erro no Google TTS:', err);
+          setState('IDLE');
+        });
+      };
+
+      playNextTTSChunk();
+      return;
+    }
+
+    // Se temos uma voz local de alta qualidade (Google/Natural/Neural), usamos speechSynthesis nativo
+    if ('speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      
+      if (speechContent.length > 500) {
+        speechContent = speechContent.slice(0, 500) + '...';
+      }
+
+      const utterance = new SpeechSynthesisUtterance(speechContent);
+      utterance.lang = 'pt-BR';
+      utterance.rate = 1.0;
+      utterance.pitch = 0.98;
+      utterance.voice = naturalVoice || ptVoices[0];
+
+      utterance.onstart = () => setState('SPEAKING');
+      utterance.onend = () => setState('IDLE');
+      utterance.onerror = () => setState('IDLE');
+
+      window.speechSynthesis.speak(utterance);
+    }
+  }, [availableVoices]);
 
   const getAudioLevel = useCallback(() => {
     if (!analyserRef.current) return 0;
@@ -211,30 +399,65 @@ export function useJasperWebSocket(): UseJasperReturn {
             geminiLiveConnectedRef.current = !!data.connected;
             break;
           case 'PIPELINE_ACTION': {
-            setMessages(prev => [...prev, {
-              id: Date.now().toString() + '-action',
-              sender: 'action',
-              text: data.action,
-              actionStatus: data.status
-            }]);
+            setMessages(prev => {
+              const lastIdx = prev.length - 1;
+              if (
+                lastIdx >= 0 &&
+                prev[lastIdx].sender === 'action' &&
+                prev[lastIdx].tool === data.tool &&
+                prev[lastIdx].actionStatus === 'running'
+              ) {
+                const updated = [...prev];
+                updated[lastIdx] = {
+                  ...updated[lastIdx],
+                  text: data.action,
+                  actionStatus: data.status,
+                  durationMs: data.durationMs || updated[lastIdx].durationMs,
+                  command: data.command || updated[lastIdx].command,
+                  output: data.output || updated[lastIdx].output,
+                  error: data.error || updated[lastIdx].error,
+                };
+                return updated;
+              }
+              return [...prev, {
+                id: Date.now().toString() + '-action-' + Math.random().toString(36).substring(2, 6),
+                sender: 'action',
+                text: data.action,
+                actionStatus: data.status,
+                tool: data.tool,
+                durationMs: data.durationMs,
+                command: data.command,
+                output: data.output,
+                error: data.error,
+              }];
+            });
             break;
           }
           case 'ASSISTANT_RESPONSE': {
             setTranscript('');
             if (data.transcribedText) {
+              setMessages(prev => {
+                const textTrim = data.transcribedText.trim();
+                const exists = prev.some(m => m.sender === 'user' && m.text.trim() === textTrim);
+                if (exists) return prev;
+                return [...prev, {
+                  id: Date.now().toString() + '-user',
+                  sender: 'user',
+                  text: data.transcribedText
+                }];
+              });
+            }
+            if (data.text) {
               setMessages(prev => [...prev, {
-                id: Date.now().toString() + '-user',
-                sender: 'user',
-                text: data.transcribedText
+                id: Date.now().toString() + '-assistant',
+                sender: 'assistant',
+                text: data.text || ''
               }]);
             }
-            setMessages(prev => [...prev, {
-              id: Date.now().toString(),
-              sender: 'assistant',
-              text: data.text || ''
-            }]);
             if (data.audioBase64) {
               playAudioChunk(data.audioBase64);
+            } else if (data.text) {
+              speakText(data.text);
             }
             break;
           }
@@ -274,6 +497,74 @@ export function useJasperWebSocket(): UseJasperReturn {
             break;
           case 'INTERRUPT':
             stopAllAudio();
+            break;
+          case 'ALARM_TRIGGER':
+            try {
+              const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
+              activeAlarmAudioRef.current = audioCtx;
+              
+              // Tocar loop de alarme continuamente até ser parado
+              const beepInterval = setInterval(() => {
+                if (!activeAlarmAudioRef.current || activeAlarmAudioRef.current.state === 'closed') {
+                  clearInterval(beepInterval);
+                  return;
+                }
+                const ctx = activeAlarmAudioRef.current;
+                const startTime = ctx.currentTime;
+                
+                const oscillator = ctx.createOscillator();
+                const gainNode = ctx.createGain();
+                
+                oscillator.type = 'square';
+                oscillator.frequency.setValueAtTime(880, startTime);
+                
+                gainNode.gain.setValueAtTime(0, startTime);
+                gainNode.gain.linearRampToValueAtTime(0.3, startTime + 0.05);
+                gainNode.gain.linearRampToValueAtTime(0, startTime + 0.3);
+                
+                oscillator.connect(gainNode);
+                gainNode.connect(ctx.destination);
+                
+                oscillator.start(startTime);
+                oscillator.stop(startTime + 0.3);
+              }, 600); // Toca a cada 600ms
+              
+            } catch (e) {
+              console.warn("AudioContext not supported or blocked", e);
+            }
+
+            // Exibir no painel do usuário
+            setActiveAlarm({ id: data.alarmId, message: data.message });
+
+            // Adicionar ao chat como system message
+            setMessages(prev => [...prev, {
+              id: Date.now().toString() + '-alarm',
+              sender: 'system',
+              text: `⏰ Alarme Disparado: ${data.message}`
+            }]);
+            break;
+          case 'TERMINAL_APPROVAL_REQUEST':
+            setMessages(prev => [...prev, {
+              id: data.id,
+              sender: 'terminal_approval',
+              text: 'Permissão para Terminal Solicitada',
+              command: data.command,
+              riskLevel: data.riskLevel || 'medium',
+              approvalStatus: 'pending'
+            }]);
+            break;
+          case 'TERMINAL_APPROVAL_STATUS_UPDATE':
+            setMessages(prev => prev.map(m => {
+              if (m.id === data.id) {
+                return {
+                  ...m,
+                  approvalStatus: data.approved ? (data.customCommand ? 'edited' : 'approved') : 'denied',
+                  executedCommand: data.customCommand || m.command,
+                  remember: data.remember,
+                };
+              }
+              return m;
+            }));
             break;
           case 'ERROR':
             setMessages(prev => [...prev, {
@@ -326,6 +617,9 @@ export function useJasperWebSocket(): UseJasperReturn {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     setMessages(prev => [...prev, { id: Date.now().toString(), sender: 'user', text }]);
     initAudioContext();
+    if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
+      audioContextRef.current.resume();
+    }
     wsRef.current.send(JSON.stringify({ type: 'TEXT_COMMAND', text, sttMs: 0 }));
   }, []);
 
@@ -350,7 +644,13 @@ export function useJasperWebSocket(): UseJasperReturn {
 
   const startLiveStreaming = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: { 
+          echoCancellation: false, 
+          noiseSuppression: false, 
+          autoGainControl: false 
+        } 
+      });
       mediaStreamRef.current = stream;
       micAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
       const source = micAudioContextRef.current.createMediaStreamSource(stream);
@@ -370,15 +670,26 @@ export function useJasperWebSocket(): UseJasperReturn {
       processor.connect(micAudioContextRef.current.destination);
       audioProcessorRef.current = processor;
       setState('LISTENING');
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error starting live streaming', err);
+      if (err.name === 'NotAllowedError' || err.name === 'SecurityError') {
+        alert("🎤 Microfone bloqueado pelo Android. \n\n1. Vá nas Configurações do Android > Aplicativos > Jasper > Permissões e libere o Microfone.\n\n2. Se o erro persistir, o WebView exige HTTPS para liberar áudio.");
+      } else {
+        alert("Erro no microfone: " + (err.message || "desconhecido"));
+      }
       setState('ERROR');
     }
   }, []);
 
   const startBlobRecording = useCallback(async () => {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ 
+        audio: { 
+          echoCancellation: false, 
+          noiseSuppression: false, 
+          autoGainControl: false 
+        } 
+      });
       mediaStreamRef.current = stream;
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
@@ -403,8 +714,13 @@ export function useJasperWebSocket(): UseJasperReturn {
 
       mediaRecorder.start();
       setState('LISTENING');
-    } catch (err) {
+    } catch (err: any) {
       console.error('Error starting blob recording', err);
+      if (err.name === 'NotAllowedError' || err.name === 'SecurityError') {
+        alert("🎤 Microfone bloqueado pelo Android. \n\n1. Vá nas Configurações do Android > Aplicativos > Jasper > Permissões e libere o Microfone.\n\n2. Se o erro persistir, o WebView exige HTTPS para liberar áudio.");
+      } else {
+        alert("Erro no microfone: " + (err.message || "desconhecido"));
+      }
       setState('ERROR');
     }
   }, []);
@@ -422,13 +738,32 @@ export function useJasperWebSocket(): UseJasperReturn {
     }
   }, [state, stopRecording, stopAllAudio, startLiveStreaming, startBlobRecording]);
 
+  const sendTerminalApproval = useCallback((id: string, approved: boolean, customCommand?: string, remember?: boolean) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({ type: 'TERMINAL_APPROVAL_RESPONSE', id, approved, customCommand, remember }));
+    setMessages(prev => prev.map(m => {
+      if (m.id === id) {
+        return {
+          ...m,
+          approvalStatus: approved ? (customCommand ? 'edited' : 'approved') : 'denied',
+          executedCommand: customCommand || m.command,
+          remember,
+        };
+      }
+      return m;
+    }));
+  }, []);
+
   return {
     state,
     isConnected,
     messages,
     transcript,
     sendText,
+    sendTerminalApproval,
     toggleMic,
-    getAudioLevel
+    getAudioLevel,
+    activeAlarm,
+    stopAlarm
   };
 }

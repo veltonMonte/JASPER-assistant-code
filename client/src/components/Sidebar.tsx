@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { X, MessageSquare, BrainCircuit, Cpu, Wrench, Monitor, Activity, Settings, Lightbulb, Power, Smartphone } from 'lucide-react';
 
 export interface SidebarProps {
@@ -9,6 +9,41 @@ export interface SidebarProps {
 }
 
 const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, onOpenDiagnostic, onSendCommand }) => {
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+  const [isInstallable, setIsInstallable] = useState(false);
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: any) => {
+      // Impede o Chrome antigo de mostrar o prompt automaticamente
+      e.preventDefault();
+      // Salva o evento para acionar quando o botão for clicado
+      setDeferredPrompt(e);
+      setIsInstallable(true);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    
+    // Se o app já estiver instalado, ou se for PWA standalone, esconder o botão de instalar
+    if (window.matchMedia('(display-mode: standalone)').matches) {
+      setIsInstallable(false);
+    }
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
+
+  const handleInstallClick = async () => {
+    if (!deferredPrompt) return;
+    deferredPrompt.prompt();
+    const { outcome } = await deferredPrompt.userChoice;
+    if (outcome === 'accepted') {
+      console.log('Usuário instalou o PWA!');
+      setIsInstallable(false);
+    }
+    setDeferredPrompt(null);
+  };
+
   return (
     <>
       <div className={`sidebar-backdrop ${isOpen ? 'open' : ''}`} onClick={onClose} />
@@ -62,8 +97,19 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, onOpenDiagnostic, on
           <button className="sidebar-menu-item" onClick={() => onSendCommand('Configurações')}>
             <Settings size={16} /> Configurações
           </button>
-          <a href="/jasper-mobile-v4.apk?v=4" download="jasper-mobile-v4.apk" className="download-app-btn">
-            <Smartphone size={16} /> Baixar App v4.0 (Google Orb)
+          {isInstallable && (
+            <button className="sidebar-menu-item download-app-btn" onClick={handleInstallClick}>
+              <Smartphone size={16} /> Instalar Aplicativo (PWA)
+            </button>
+          )}
+          {/* Link permanente para baixar o APK Nativo do Android */}
+          <a 
+            href="/jasper-mobile-v7.1.apk" 
+            download
+            className="flex items-center gap-2 p-2 mx-2 mb-2 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 hover:text-emerald-300 transition-colors border border-emerald-500/20"
+          >
+            <Smartphone size={16} />
+            <span className="text-sm font-medium">Baixar App Nativo v7.1</span>
           </a>
         </div>
       </aside>

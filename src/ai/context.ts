@@ -8,6 +8,14 @@ export class ContextManager {
   private maxHistory: number = 10; // Mantém até 10 turnos de mensagem na memória temporária
 
   public addMessage(message: ChatMessage): void {
+    if (this.messages.length > 0) {
+      const lastMsg = this.messages[this.messages.length - 1];
+      if (lastMsg.role === message.role) {
+        // Overwrite last message if role is identical to preserve strict alternating sequence
+        this.messages[this.messages.length - 1] = message;
+        return;
+      }
+    }
     this.messages.push(message);
     if (this.messages.length > this.maxHistory * 2) {
       this.messages = this.messages.slice(-this.maxHistory * 2);

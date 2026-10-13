@@ -80,13 +80,13 @@ export default function Orb({ state, getAudioLevel }: OrbProps) {
     let smoothedScale = 1;
     let smoothedAudioLvl = 0;
     
-    // Blob definitions (Cores menores para não se misturarem tanto)
+    // Blob definitions originais (lava lamp luminosa sem pontos escuros)
     const blobs = [
-      { color: '#ff9a9e', size: 30, speedX: 1, speedY: 1.2, offset: 0 },
-      { color: '#fecfef', size: 28, speedX: -1.5, speedY: 0.8, offset: 2 },
-      { color: '#a18cd1', size: 35, speedX: 0.8, speedY: -1.3, offset: 4 },
-      { color: '#3b82f6', size: 32, speedX: -1.1, speedY: -1.1, offset: 6 },
-      { color: '#06b6d4', size: 26, speedX: 1.3, speedY: 1.5, offset: 8 },
+      { color: '#ffb3ba', size: 36, speedX: 1, speedY: 1.2, offset: 0 },
+      { color: '#fed7f2', size: 34, speedX: -1.5, speedY: 0.8, offset: 2 },
+      { color: '#c4b5fd', size: 42, speedX: 0.8, speedY: -1.3, offset: 4 },
+      { color: '#60a5fa', size: 38, speedX: -1.1, speedY: -1.1, offset: 6 },
+      { color: '#22d3ee', size: 34, speedX: 1.3, speedY: 1.5, offset: 8 },
     ];
 
     const render = () => {
@@ -146,33 +146,79 @@ export default function Orb({ state, getAudioLevel }: OrbProps) {
       ctx.translate(size / 2, size / 2);
       ctx.scale(smoothedScale, smoothedScale);
 
-      // Função para traçar o formato do orbe (perfeito ou levemente deformado)
+      // Formato Cápsula (Ondas ativadas EXCLUSIVAMENTE ao falar - SPEAKING)
       const drawOrbPath = () => {
         ctx.beginPath();
-        if (currentState === 'SPEAKING' && smoothedAudioLvl > 0.005) {
-          const numPoints = 60;
-          for (let i = 0; i <= numPoints; i++) {
-            const angle = (i / numPoints) * Math.PI * 2;
-            let r = radius;
+        const baseRx = 76;
+        const baseRy = 48;
+        
+        const isSpeaking = currentState === 'SPEAKING';
+        const audioAmp = isSpeaking ? Math.max(smoothedAudioLvl, 0.15) : 0;
+
+        const straightWidth = Math.max(0, baseRx - baseRy);
+
+        if (isSpeaking && audioAmp > 0.01) {
+          const numSteps = 72;
+          const points: { x: number; y: number }[] = [];
+
+          for (let i = 0; i <= numSteps; i++) {
+            const u = i / numSteps;
+            const angle = u * Math.PI * 2;
+
+            let px = 0;
+            let py = 0;
+            let nx = Math.cos(angle);
+            let ny = Math.sin(angle);
+
+            if (u < 0.25) {
+              const t = u / 0.25;
+              px = -straightWidth + t * (2 * straightWidth);
+              py = -baseRy;
+              nx = 0; ny = -1;
+            } else if (u < 0.5) {
+              const t = (u - 0.25) / 0.25;
+              const a = -Math.PI / 2 + t * Math.PI;
+              px = straightWidth + Math.cos(a) * baseRy;
+              py = Math.sin(a) * baseRy;
+              nx = Math.cos(a); ny = Math.sin(a);
+            } else if (u < 0.75) {
+              const t = (u - 0.5) / 0.25;
+              px = straightWidth - t * (2 * straightWidth);
+              py = baseRy;
+              nx = 0; ny = 1;
+            } else {
+              const t = (u - 0.75) / 0.25;
+              const a = Math.PI / 2 + t * Math.PI;
+              px = -straightWidth + Math.cos(a) * baseRy;
+              py = Math.sin(a) * baseRy;
+              nx = Math.cos(a); ny = Math.sin(a);
+            }
+
+            // Deformação de ruído 2D ativada apenas na fala do assistente
+            const nSpaceX = Math.cos(angle) * 1.5;
+            const nSpaceY = Math.sin(angle) * 1.5;
+            const n = noise(nSpaceX + time * 5, nSpaceY + time * 5);
             
-            // Mapeia o círculo no espaço de ruído 2D para que deforme sem emendas
-            const nx = Math.cos(angle) * 1.5;
-            const ny = Math.sin(angle) * 1.5;
-            const n = noise(nx + time * 5, ny + time * 5);
-            
-            // Deformação bem pequena nas bordas (n-0.5 varia de -0.5 a 0.5)
-            const deformation = (n - 0.5) * (smoothedAudioLvl * 8); 
-            r += deformation;
-            
-            const px = Math.cos(angle) * r;
-            const py = Math.sin(angle) * r;
-            
-            if (i === 0) ctx.moveTo(px, py);
-            else ctx.lineTo(px, py);
+            const deformation = (n - 0.5) * (audioAmp * 10);
+
+            px += nx * deformation;
+            py += ny * deformation;
+
+            points.push({ x: px, y: py });
+          }
+
+          ctx.moveTo(points[0].x, points[0].y);
+          for (let i = 1; i < points.length; i++) {
+            ctx.lineTo(points[i].x, points[i].y);
           }
           ctx.closePath();
         } else {
-          ctx.arc(0, 0, radius, 0, Math.PI * 2);
+          ctx.moveTo(-straightWidth, -baseRy);
+          ctx.lineTo(straightWidth, -baseRy);
+          ctx.arc(straightWidth, 0, baseRy, -Math.PI / 2, Math.PI / 2, false);
+          ctx.lineTo(-straightWidth, baseRy);
+          ctx.arc(-straightWidth, 0, baseRy, Math.PI / 2, -Math.PI / 2, false);
+          ctx.closePath();
         }
       };
 
@@ -192,8 +238,8 @@ export default function Orb({ state, getAudioLevel }: OrbProps) {
       drawOrbPath();
       ctx.clip();
 
-      // Clear background inside clip
-      ctx.fillStyle = '#0A0A0A'; // matching dark theme bg to prevent transparency bleeding if needed, or leave transparent
+      // Clear background inside clip with illuminated deep violet tone (eliminando pontos escuros)
+      ctx.fillStyle = '#221c38';
       ctx.fill();
 
       // Apply blur to all blobs
@@ -255,6 +301,15 @@ export default function Orb({ state, getAudioLevel }: OrbProps) {
 
       ctx.globalAlpha = 1.0;
       ctx.globalCompositeOperation = 'source-over';
+
+      // Contorno branco elegante e luminoso ao redor da cápsula
+      drawOrbPath();
+      ctx.lineWidth = 2.5;
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.88)';
+      ctx.shadowColor = 'rgba(255, 255, 255, 0.6)';
+      ctx.shadowBlur = 10;
+      ctx.stroke();
+
       ctx.restore();
 
       animationFrameId = requestAnimationFrame(render);

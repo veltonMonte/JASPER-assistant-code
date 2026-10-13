@@ -8,34 +8,23 @@ export interface HeaderProps {
   onToggleSidebar: () => void;
 }
 
-const Header: React.FC<HeaderProps> = ({ isConnected, state, onToggleSidebar }) => {
+const Header: React.FC<HeaderProps> = ({ isConnected, onToggleSidebar }) => {
   return (
-    <header className="header" style={{ padding: '0.5rem 1rem' }}>
+    <header className="header">
       <div className="header-left">
         <button className="menu-button" onClick={onToggleSidebar} aria-label="Toggle Sidebar">
-          <Menu size={20} />
+          <Menu size={18} />
         </button>
         <div className="logo-container">
           <h1 className="logo-text">JASPER</h1>
-          <span className="subtitle" style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-            Agente de Sistema Inteligente
-            <span style={{ width: '6px', height: '6px', borderRadius: '50%', backgroundColor: isConnected ? '#22c55e' : '#ef4444' }}></span>
-            <span style={{ fontSize: '0.7rem' }}>{isConnected ? 'Online' : 'Offline'}</span>
-          </span>
+          <span className="subtitle">Agente de sistema inteligente</span>
         </div>
       </div>
       <div className="header-right">
-        {isConnected ? (
-          <div className="status-indicator online">
-            <span className="status-dot-pulse"></span>
-            <span className="status-text">Online</span>
-          </div>
-        ) : (
-          <div className="status-indicator error">
-            <span className="status-dot-solid"></span>
-            <span className="status-text">Offline</span>
-          </div>
-        )}
+        <div className="status-pill">
+          <span className={`dot ${isConnected ? 'online' : 'offline'}`}></span>
+          <span className="label">{isConnected ? 'Online' : 'Offline'}</span>
+        </div>
       </div>
     </header>
   );

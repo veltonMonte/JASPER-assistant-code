@@ -1,9 +1,11 @@
 import { ligarPC, verificarPC, desligarPC } from './computer.js';
-import { pesquisarWeb, acessarSite } from './web.js';
+import { pesquisarWeb, acessarSite, pesquisarImagens } from './web.js';
 import { enviarMensagem } from './messaging.js';
 import { abrirPrograma } from './applications.js';
-import { consultarHorario, criarLembrete, salvarMemoria, buscarMemoria } from './system.js';
+import { consultarHorario, criarLembrete, salvarMemoria, buscarMemoria, agendarAlarme } from './system.js';
 import { toggleDevice, getDeviceStatus } from './smarthome.js';
+import { executarTerminal } from './terminal.js';
+import { baixarMidia } from './media.js';
 
 /**
  * Declaração das ferramentas disponíveis para o modelo Google Gemini (Function Calling)
@@ -45,6 +47,20 @@ export const geminiToolDeclarations = [
         query: {
           type: 'STRING',
           description: 'O termo ou pergunta exata para buscar na internet.',
+        },
+      },
+      required: ['query'],
+    },
+  },
+  {
+    name: 'pesquisar_imagens',
+    description: 'Busca e exibe imagens/fotos da internet no chat quando o usuário solicitar para ver imagens, fotos ou ilustrações.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        query: {
+          type: 'STRING',
+          description: 'O termo de busca para pesquisar imagens (ex: gato fofo, paisagem de praia, logo do python).',
         },
       },
       required: ['query'],
@@ -121,6 +137,28 @@ export const geminiToolDeclarations = [
         },
       },
       required: ['dataHorario', 'texto'],
+    },
+  },
+  {
+    name: 'agendar_alarme',
+    description: 'Cria um alarme ou compromisso na agenda do sistema que será disparado e notificado no momento exato.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        tipo: {
+          type: 'STRING',
+          description: 'O tipo de notificação ("alarm" para alarmes, "agenda" para compromissos)',
+        },
+        dataHorario: {
+          type: 'STRING',
+          description: 'A data e hora exata no formato YYYY-MM-DD HH:MM:SS. Exemplo: "2026-09-10 19:30:00"',
+        },
+        mensagem: {
+          type: 'STRING',
+          description: 'O título ou mensagem que será mostrada quando o alarme tocar (ex: "Acordar!", "Reunião de equipe").',
+        }
+      },
+      required: ['tipo', 'dataHorario', 'mensagem'],
     },
   },
   {
@@ -202,7 +240,56 @@ export const geminiToolDeclarations = [
       required: ['chartConfig'],
     },
   },
+  {
+    name: 'executar_terminal',
+    description: 'Executa comandos no terminal do sistema local do usuário (Linux). Use para listar arquivos, rodar scripts, gerenciar processos, etc. O comando ficará pausado até que o usuário aprove.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        comando: {
+          type: 'STRING',
+          description: 'O comando exato de shell/bash a ser executado (ex: ls -la, pwd, echo "teste"). Não envie comandos que usam sudo.',
+        },
+      },
+      required: ['comando'],
+    },
+  },
+  {
+    name: 'baixar_midia',
+    description: 'Baixa vídeos (do YouTube, Instagram, etc) ou fotos/imagens da internet e salva diretamente no computador do usuário.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        url: {
+          type: 'STRING',
+          description: 'A URL do vídeo ou foto a ser baixado.',
+        },
+        tipo: {
+          type: 'STRING',
+          description: 'O tipo de mídia a ser baixado ("video" ou "foto").',
+          enum: ['video', 'foto']
+        },
+      },
+      required: ['url', 'tipo'],
+    },
+  },
+  {
+    name: 'renderizar_video',
+    description: 'Renderiza um reprodutor de vídeo interativo no chat para que o usuário possa assistir a um vídeo do YouTube ou link direto.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        url: {
+          type: 'STRING',
+          description: 'A URL do vídeo a ser exibido (ex: link do YouTube ou .mp4).',
+        },
+      },
+      required: ['url'],
+    },
+  },
 ];
+
+import { toolEvents } from '../events/toolEvents.js';
 
 /**
  * Executa a ferramenta solicitada pelo Gemini ou pelo Intent Router pelo nome
@@ -210,56 +297,79 @@ export const geminiToolDeclarations = [
 export async function executeToolByName(name: string, args: Record<string, any> = {}): Promise<any> {
   console.log(`🛠️ Executando Ferramenta: [${name}] com argumentos:`, JSON.stringify(args));
   const startTime = Date.now();
+  toolEvents.emit('pipeline_action_start', { tool: name, args });
   let result: any;
 
-  switch (name) {
-    case 'ligar_pc':
-      result = await ligarPC();
-      break;
-    case 'verificar_pc':
-      result = await verificarPC();
-      break;
-    case 'desligar_pc':
-      result = await desligarPC();
-      break;
-    case 'pesquisar_web':
-      result = await pesquisarWeb(args.query || '');
-      break;
-    case 'acessar_site':
-      result = await acessarSite(args.url || '');
-      break;
-    case 'enviar_mensagem':
-      result = await enviarMensagem(args.contato || '', args.mensagem || '');
-      break;
-    case 'abrir_programa':
-      result = await abrirPrograma(args.programa || '');
-      break;
-    case 'consultar_horario':
-      result = await consultarHorario();
-      break;
-    case 'criar_lembrete':
-      result = await criarLembrete(args.dataHorario || '', args.texto || '');
-      break;
-    case 'salvar_memoria':
-      result = await salvarMemoria(args.chave || '', args.valor || '', args.categoria || 'general');
-      break;
-    case 'buscar_memoria':
-      result = await buscarMemoria(args.chave || '');
-      break;
-    case 'toggle_device':
-      result = await toggleDevice(args.deviceName || '', args.state || 'on');
-      break;
-    case 'get_device_status':
-      result = await getDeviceStatus(args.deviceName || '');
-      break;
-    case 'renderizar_grafico':
-      result = { chartConfig: args.chartConfig, success: true };
-      break;
-    default:
-      result = { error: `Ferramenta "${name}" desconhecida ou não registrada.` };
+  try {
+    switch (name) {
+      case 'ligar_pc':
+        result = await ligarPC();
+        break;
+      case 'verificar_pc':
+        result = await verificarPC();
+        break;
+      case 'desligar_pc':
+        result = await desligarPC();
+        break;
+      case 'pesquisar_web':
+        result = await pesquisarWeb(args.query || '');
+        break;
+      case 'pesquisar_imagens':
+        result = await pesquisarImagens(args.query || '');
+        break;
+      case 'acessar_site':
+        result = await acessarSite(args.url || '');
+        break;
+      case 'enviar_mensagem':
+        result = await enviarMensagem(args.contato || '', args.mensagem || '');
+        break;
+      case 'abrir_programa':
+        result = await abrirPrograma(args.programa || '');
+        break;
+      case 'consultar_horario':
+        result = await consultarHorario();
+        break;
+      case 'criar_lembrete':
+        result = await criarLembrete(args.dataHorario || '', args.texto || '');
+        break;
+      case 'agendar_alarme':
+        result = await agendarAlarme(args.tipo || '', args.dataHorario || '', args.mensagem || '');
+        break;
+      case 'salvar_memoria':
+        result = await salvarMemoria(args.chave || '', args.valor || '', args.categoria || 'general');
+        break;
+      case 'buscar_memoria':
+        result = await buscarMemoria(args.chave || '');
+        break;
+      case 'toggle_device':
+        result = await toggleDevice(args.deviceName || '', args.state || 'on');
+        break;
+      case 'get_device_status':
+        result = await getDeviceStatus(args.deviceName || '');
+        break;
+      case 'renderizar_grafico':
+        result = { chartConfig: args.chartConfig, success: true };
+        break;
+      case 'renderizar_video':
+        result = { url: args.url, success: true };
+        break;
+      case 'executar_terminal':
+        result = await executarTerminal(args.comando || '');
+        break;
+      case 'baixar_midia':
+        result = await baixarMidia(args.url || '', args.tipo || 'video');
+        break;
+      default:
+        result = { error: `Ferramenta "${name}" desconhecida ou não registrada.` };
+    }
+  } catch (err: any) {
+    result = { error: err.message || 'Erro desconhecido na execução da ferramenta.' };
   }
 
   const durationMs = Date.now() - startTime;
+  const isSuccess = !result?.error && result?.success !== false;
+  toolEvents.emit('pipeline_action_end', { tool: name, durationMs, success: isSuccess, args, result });
   console.log(`✅ Ferramenta [${name}] concluída em ${durationMs}ms`);
   return { ...result, _executionTimeMs: durationMs };
 }
+

@@ -25,7 +25,7 @@ const cleanText = (text: string) => {
 }
 
 export default function App() {
-  const { state, isConnected, messages, transcript, sendText, toggleMic, getAudioLevel } = useJasperWebSocket()
+  const { state, isConnected, messages, transcript, sendText, toggleMic, getAudioLevel, sendTerminalApproval, activeAlarm, stopAlarm } = useJasperWebSocket()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [diagnosticOpen, setDiagnosticOpen] = useState(false)
 
@@ -47,6 +47,23 @@ export default function App() {
 
   return (
     <div className={`app ${hasMessages ? 'chat-mode' : 'initial-mode'}`}>
+      
+      {activeAlarm && (
+        <div className="alarm-overlay modern">
+          <div className="alarm-content">
+            <div className="alarm-time">
+               {new Date().toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}
+            </div>
+            <h2 className="alarm-title">Alarme</h2>
+            <p className="alarm-message">{activeAlarm.message}</p>
+          </div>
+          <div className="alarm-actions">
+             <button className="alarm-snooze-btn" onClick={stopAlarm}>Soneca</button>
+             <button className="alarm-stop-btn-modern" onClick={stopAlarm}>Parar</button>
+          </div>
+        </div>
+      )}
+
       <Header isConnected={isConnected} state={state} onToggleSidebar={handleToggleSidebar} />
 
       <main className="main-content">
@@ -65,7 +82,7 @@ export default function App() {
           </div>
         ) : (
           <div className="chat-container">
-            <ChatFeed messages={messages} />
+            <ChatFeed messages={messages} onApproveTerminal={sendTerminalApproval} />
           </div>
         )}
       </main>

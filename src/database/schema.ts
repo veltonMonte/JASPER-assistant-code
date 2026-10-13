@@ -31,4 +31,14 @@ CREATE TABLE IF NOT EXISTS performance_logs (
   route_type TEXT, -- 'DIRECT_INTENT' | 'GEMINI_AGENT'
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Tabela para gerenciar alarmes e agendamentos
+CREATE TABLE IF NOT EXISTS alarms_agenda (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  type TEXT NOT NULL, -- 'alarm' ou 'agenda'
+  trigger_time DATETIME NOT NULL,
+  message TEXT NOT NULL,
+  status TEXT DEFAULT 'pending',
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
 `;

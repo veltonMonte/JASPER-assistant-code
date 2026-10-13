@@ -138,6 +138,41 @@ class DatabaseManager {
       }
     });
   }
+
+  // --- Operações de Alarme e Agenda ---
+
+  public createAlarm(type: 'alarm' | 'agenda', triggerTime: string, message: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!this.db) return resolve();
+      const query = `INSERT INTO alarms_agenda (type, trigger_time, message, status) VALUES (?, ?, ?, 'pending')`;
+      this.db.run(query, [type, triggerTime, message], (err) => {
+        if (err) return reject(err);
+        resolve();
+      });
+    });
+  }
+
+  public getPendingAlarms(): Promise<Array<{ id: number; type: string; trigger_time: string; message: string }>> {
+    return new Promise((resolve, reject) => {
+      if (!this.db) return resolve([]);
+      const query = `SELECT * FROM alarms_agenda WHERE status = 'pending' AND datetime(trigger_time) <= datetime('now', 'localtime')`;
+      this.db.all(query, [], (err, rows: any) => {
+        if (err) return reject(err);
+        resolve(rows || []);
+      });
+    });
+  }
+
+  public markAlarmDone(id: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!this.db) return resolve();
+      const query = `UPDATE alarms_agenda SET status = 'done' WHERE id = ?`;
+      this.db.run(query, [id], (err) => {
+        if (err) return reject(err);
+        resolve();
+      });
+    });
+  }
 }
 
 export const dbManager = new DatabaseManager();

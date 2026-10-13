@@ -30,6 +30,8 @@ const InputBar: React.FC<InputBarProps> = ({ onSendText, onToggleMic, isListenin
     }
   };
 
+  const hasText = text.trim().length > 0;
+
   return (
     <footer className="input-bar">
       <div className="input-wrapper">
@@ -52,9 +54,9 @@ const InputBar: React.FC<InputBarProps> = ({ onSendText, onToggleMic, isListenin
         <button
           type="button"
           onClick={handleSubmit}
-          className="input-btn send"
+          className={`input-btn send ${hasText ? 'has-text' : ''}`}
           aria-label="Send Message"
-          disabled={!text.trim()}
+          disabled={!hasText}
         >
           <Send size={18} />
         </button>

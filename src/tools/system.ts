@@ -49,6 +49,29 @@ export async function criarLembrete(
 }
 
 /**
+ * Agenda um alarme ou compromisso no sistema ativo
+ */
+export async function agendarAlarme(
+  tipo: 'alarm' | 'agenda',
+  dataHorario: string,
+  mensagem: string
+): Promise<{ success: boolean; message: string }> {
+  // dataHorario esperado no formato YYYY-MM-DD HH:MM:SS
+  try {
+    await dbManager.createAlarm(tipo, dataHorario, mensagem);
+    return {
+      success: true,
+      message: `✅ ${tipo === 'alarm' ? 'Alarme' : 'Compromisso'} agendado com sucesso para ${dataHorario}.`,
+    };
+  } catch (err: any) {
+    return {
+      success: false,
+      message: `Erro ao agendar: ${err.message}`,
+    };
+  }
+}
+
+/**
  * Salva uma informação na memória persistente SQLite do JASPER
  */
 export async function salvarMemoria(

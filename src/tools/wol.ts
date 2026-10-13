@@ -1,11 +1,11 @@
 import wol from 'wake_on_lan';
-import { env } from '../config/config';
+import { config } from '../config/config.js';
 
 /**
  * Liga o computador desktop via Wake-on-LAN.
  */
 export async function turnOnPC(): Promise<string> {
-  const macAddress = env.DESKTOP_MAC_ADDRESS || '00:00:00:00:00:00';
+  const macAddress = config.targetPc.mac || process.env.DESKTOP_MAC_ADDRESS || '00:00:00:00:00:00';
   
   if (macAddress === '00:00:00:00:00:00') {
     return 'O endereço MAC do computador não foi configurado. Por favor, adicione o DESKTOP_MAC_ADDRESS no arquivo .env.';

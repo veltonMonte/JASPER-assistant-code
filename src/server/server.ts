@@ -6,6 +6,7 @@ import { config } from '../config/config.js';
 import { dbManager } from '../database/database.js';
 import routes from './routes.js';
 import { jasperWsServer } from './websocket.js';
+import { scheduler } from './scheduler.js';
 
 const app = express();
 
@@ -16,7 +17,14 @@ app.use(express.urlencoded({ extended: true }));
 
 // Servir arquivos estáticos do Web Client / PWA no Celular
 const publicDir = path.resolve(process.cwd(), 'public');
-app.use(express.static(publicDir));
+app.use(express.static(publicDir, {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith('.apk')) {
+      res.setHeader('Content-Type', 'application/vnd.android.package-archive');
+      res.setHeader('Content-Disposition', `attachment; filename="${path.basename(filePath)}"`);
+    }
+  }
+}));
 
 // Rotas da API REST
 app.use('/api', routes);
@@ -33,6 +41,9 @@ async function bootstrap() {
     
     // 1. Inicializa Banco de Dados SQLite
     await dbManager.init();
+
+    // 2. Inicializa o agendador de alarmes e tarefas
+    scheduler.start();
 
     const tryListen = (port: number) => {
       const server = http.createServer(app);

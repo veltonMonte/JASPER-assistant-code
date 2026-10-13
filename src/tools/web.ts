@@ -11,6 +11,13 @@ export interface SearchResult {
   url?: string;
 }
 
+export interface ImageResult {
+  title: string;
+  image: string;
+  thumbnail: string;
+  url: string;
+}
+
 /**
  * Pesquisa informações em tempo real na internet utilizando o módulo Python do JASPER
  */
@@ -19,12 +26,25 @@ export async function pesquisarWeb(query: string): Promise<{ query: string; resu
     console.log(`🔍 JASPER Pesquisando na Web por: "${query}"`);
     
     const scriptPath = path.resolve(process.cwd(), 'web_search_jasper.py');
-    const { stdout } = await execPromise(`python3 "${scriptPath}" "${query.replace(/"/g, '\\"')}"`, { timeout: 8000 });
+    const { stdout } = await execPromise(`python3 "${scriptPath}" --json "${query.replace(/"/g, '\\"')}"`, { timeout: 9000 });
     
-    const results: SearchResult[] = [];
+    let results: SearchResult[] = [];
     const cleanOutput = stdout.trim();
     
-    if (cleanOutput) {
+    if (cleanOutput && cleanOutput.startsWith('[')) {
+      try {
+        const parsed = JSON.parse(cleanOutput);
+        results = parsed.map((item: any) => ({
+          title: item.titulo || item.title || 'Resultado',
+          snippet: item.resumo || item.snippet || '',
+          url: item.url || undefined
+        }));
+      } catch (e) {
+        console.warn('⚠️ Falha ao converter JSON de busca web, aplicando fallback de texto.');
+      }
+    }
+
+    if (results.length === 0 && cleanOutput) {
       const lines = cleanOutput.split('\n').filter(l => l.trim().length > 0);
       lines.forEach((line, idx) => {
         const text = line.replace(/^[•\-\[\d+\]\s]+/, '').trim();
@@ -57,7 +77,7 @@ export async function pesquisarWeb(query: string): Promise<{ query: string; resu
     return {
       query,
       results,
-      message: `Encontrados ${results.length} resultados para a busca "${query}". Use estes dados para responder ao usuário.`,
+      message: `Encontrados ${results.length} resultados atualizados para a busca "${query}". Use estes dados para responder ao usuário com precisão.`,
     };
   } catch (error: any) {
     console.error('❌ Erro na ferramenta de busca web do JASPER:', error.message);
@@ -70,6 +90,41 @@ export async function pesquisarWeb(query: string): Promise<{ query: string; resu
         }
       ],
       message: `Pesquisa concluída para "${query}".`,
+    };
+  }
+}
+
+/**
+ * Busca imagens de alta qualidade no Google / Bing / Web quando o usuário solicitar
+ */
+export async function pesquisarImagens(query: string): Promise<{ query: string; images: ImageResult[]; message: string }> {
+  try {
+    console.log(`🖼️ JASPER Buscando Imagens por: "${query}"`);
+    const scriptPath = path.resolve(process.cwd(), 'web_search_jasper.py');
+    const { stdout } = await execPromise(`python3 "${scriptPath}" --images "${query.replace(/"/g, '\\"')}"`, { timeout: 10000 });
+
+    let images: ImageResult[] = [];
+    const cleanOutput = stdout.trim();
+
+    if (cleanOutput && cleanOutput.startsWith('[')) {
+      try {
+        images = JSON.parse(cleanOutput);
+      } catch (e) {
+        console.warn('⚠️ Falha ao fazer parse do JSON de imagens.');
+      }
+    }
+
+    return {
+      query,
+      images,
+      message: `Encontradas ${images.length} imagens para "${query}". As imagens foram enviadas para exibição na galeria interativa no chat.`
+    };
+  } catch (error: any) {
+    console.error('❌ Erro ao buscar imagens:', error.message);
+    return {
+      query,
+      images: [],
+      message: `Não foi possível carregar as imagens para "${query}".`
     };
   }
 }
@@ -118,3 +173,4 @@ export async function acessarSite(url: string): Promise<{ url: string; content: 
     };
   }
 }
+

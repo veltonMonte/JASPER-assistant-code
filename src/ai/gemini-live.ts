@@ -119,7 +119,16 @@ export class GeminiLiveSession extends EventEmitter {
         memories.map((m) => `- ${m.key}: ${m.value}`).join('\n') + '\n';
     }
 
-    const fullPrompt = JASPER_SYSTEM_PROMPT + memorySummary +
+    const now = new Date();
+    const fmtStr = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(now);
+    
+    // Calcula o ISO string no fuso horário correto
+    const tzDate = new Date(now.toLocaleString("en-US", {timeZone: "America/Sao_Paulo"}));
+    const isoStr = tzDate.getFullYear() + "-" + String(tzDate.getMonth()+1).padStart(2, '0') + "-" + String(tzDate.getDate()).padStart(2, '0') + " " + String(tzDate.getHours()).padStart(2, '0') + ":" + String(tzDate.getMinutes()).padStart(2, '0') + ":" + String(tzDate.getSeconds()).padStart(2, '0');
+    
+    const timeContext = `\n[CONTEXTO DE TEMPO DA CONEXÃO]\nO horário que esta sessão iniciou em Brasília (America/Sao_Paulo) foi: ${fmtStr}.\n(Formato ISO: ${isoStr}).\nATENÇÃO: Este horário pode estar desatualizado! Você DEVE SEMPRE chamar a ferramenta 'consultarHorario' ANTES de agendar qualquer alarme para saber a hora ATUAL exata e calcular o tempo corretamente!\n`;
+
+    const fullPrompt = JASPER_SYSTEM_PROMPT + memorySummary + timeContext +
       '\nVocê é JASPER e está conversando por voz em tempo real. Responda com voz natural e objetiva em português do Brasil.';
 
     const setupPayload = {
@@ -165,6 +174,19 @@ export class GeminiLiveSession extends EventEmitter {
     };
 
     this.ws!.send(JSON.stringify(audioPayload));
+    return true;
+  }
+
+  public forceTurnComplete(): boolean {
+    if (!this.isLiveConnected()) return false;
+
+    const completePayload = {
+      clientContent: {
+        turnComplete: true,
+      },
+    };
+
+    this.ws!.send(JSON.stringify(completePayload));
     return true;
   }
 

@@ -178,15 +178,8 @@ export class GeminiLiveSession extends EventEmitter {
   }
 
   public forceTurnComplete(): boolean {
-    if (!this.isLiveConnected()) return false;
-
-    const completePayload = {
-      clientContent: {
-        turnComplete: true,
-      },
-    };
-
-    this.ws!.send(JSON.stringify(completePayload));
+    // No Gemini Live API, o streaming de áudio já utiliza o VAD neural automático do servidor Gemini.
+    // Enviar clientContent sem turns gera erro 1007 (invalid argument) e derruba a conexão WebSocket.
     return true;
   }
 

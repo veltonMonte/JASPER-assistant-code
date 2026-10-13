@@ -1,94 +1,120 @@
 import { WebSocket } from 'ws';
-import { spawn, ChildProcess } from 'child_process';
+import { spawn, ChildProcess, execSync } from 'child_process';
 
 const WS_URL = 'ws://localhost:3000/ws';
 
-console.log('🤖 Iniciando Cliente Local de Voz (Notebook)...');
-console.log(`Conectando em ${WS_URL}...`);
-
-const ws = new WebSocket(WS_URL);
+console.log('🤖 Iniciando Cliente Local de Voz do JASPER (Notebook)...');
 
 let isAssistantSpeaking = false;
 let arecord: ChildProcess | null = null;
 let aplay: ChildProcess | null = null;
+let ws: WebSocket | null = null;
+let reconnectTimer: NodeJS.Timeout | null = null;
 
-ws.on('open', () => {
-  console.log('✅ Conectado ao servidor JASPER!');
-  
-  // Inicia o processo de gravação do microfone local
-  // Formato: 16-bit PCM, 1 canal (Mono), 16000 Hz, raw
-  arecord = spawn('arecord', ['-f', 'S16_LE', '-c', '1', '-r', '16000', '-t', 'raw']);
-  
-  // Inicia o processo de reprodução no alto-falante
-  // Formato do Gemini: 16-bit PCM, 1 canal (Mono), 24000 Hz, raw
-  aplay = spawn('aplay', ['-f', 'S16_LE', '-c', '1', '-r', '24000', '-t', 'raw']);
+function connect() {
+  console.log(`🔌 Conectando em ${WS_URL}...`);
+  ws = new WebSocket(WS_URL);
 
-  arecord.stdout?.on('data', (chunk: Buffer) => {
-    if (ws.readyState === WebSocket.OPEN && !isAssistantSpeaking) {
-      ws.send(JSON.stringify({
-        type: 'PCM_AUDIO_CHUNK',
-        base64Pcm: chunk.toString('base64')
-      }));
-    }
-  });
-
-  arecord.stderr?.on('data', (data) => {
-    // Ignorar avisos de overrun do arecord
-  });
-
-  arecord.on('close', (code) => {
-    console.log(`🎙️ Processo do microfone encerrado (código ${code})`);
-  });
-
-  aplay.on('close', (code) => {
-    console.log(`🔊 Processo de áudio encerrado (código ${code})`);
-  });
-});
-
-ws.on('message', (data: Buffer) => {
-  try {
-    const msg = JSON.parse(data.toString());
+  ws.on('open', () => {
+    console.log('✅ Conectado ao servidor JASPER!');
     
-    if (msg.type === 'STATE_CHANGE') {
-      isAssistantSpeaking = (msg.state === 'SPEAKING');
-      console.log(`[JASPER] Estado alterado para: ${msg.state}`);
+    // Dispositivo de entrada: prioriza Loopback (WO Mic) se disponível, senão usa padrão
+    let micDevice = '';
+    try {
+      const devices = execSync('arecord -l', { encoding: 'utf8' });
+      if (devices.includes('Loopback')) {
+        micDevice = 'plughw:CARD=Loopback,DEV=1,SUBDEV=0';
+        console.log('🎙️ Dispositivo de entrada: WO Mic detectado (Loopback)!');
+      } else {
+        console.log('🎙️ Dispositivo de entrada: Microfone padrão do sistema');
+      }
+    } catch (e) {
+      micDevice = '';
+    }
+
+    if (arecord) {
+      arecord.kill();
+      arecord = null;
+    }
+    if (aplay) {
+      aplay.kill();
+      aplay = null;
+    }
+
+    const arecordArgs = micDevice
+      ? ['-D', micDevice, '-f', 'S16_LE', '-c', '1', '-r', '16000', '-t', 'raw']
+      : ['-f', 'S16_LE', '-c', '1', '-r', '16000', '-t', 'raw'];
+    
+    arecord = spawn('arecord', arecordArgs);
+    aplay = spawn('aplay', ['-f', 'S16_LE', '-c', '1', '-r', '24000', '-t', 'raw']);
+
+    arecord.stdout?.on('data', (chunk: Buffer) => {
+      if (ws && ws.readyState === WebSocket.OPEN && !isAssistantSpeaking) {
+        ws.send(JSON.stringify({
+          type: 'PCM_AUDIO_CHUNK',
+          base64Pcm: chunk.toString('base64')
+        }));
+      }
+    });
+
+    arecord.stderr?.on('data', () => {});
+    arecord.on('close', (code) => {
+      console.log(`🎙️ Processo do microfone encerrado (código ${code})`);
+    });
+
+    aplay.on('close', (code) => {
+      console.log(`🔊 Processo de áudio encerrado (código ${code})`);
+    });
+  });
+
+  ws.on('message', (data: Buffer) => {
+    try {
+      const msg = JSON.parse(data.toString());
       
-      if (msg.state === 'SPEAKING') {
-        console.log('🔊 JASPER está falando (Microfone temporariamente mutado)');
-      } else if (msg.state === 'LISTENING') {
-        console.log('🎤 JASPER está ouvindo (Pode falar!)');
+      if (msg.type === 'STATE_CHANGE') {
+        isAssistantSpeaking = (msg.state === 'SPEAKING');
+        if (msg.state === 'SPEAKING') {
+          console.log('🔊 JASPER está falando (Microfone temporariamente pausado)');
+        } else if (msg.state === 'LISTENING') {
+          console.log('🎤 JASPER está ouvindo (Pode falar pelo celular!)');
+        }
       }
-    }
 
-    if (msg.type === 'LIVE_AUDIO_CHUNK' && msg.audioBase64) {
-      const pcmBuffer = Buffer.from(msg.audioBase64, 'base64');
-      if (aplay?.stdin && !aplay.stdin.destroyed) {
-        aplay.stdin.write(pcmBuffer);
+      if (msg.type === 'LIVE_AUDIO_CHUNK' && msg.audioBase64) {
+        const pcmBuffer = Buffer.from(msg.audioBase64, 'base64');
+        if (aplay?.stdin && !aplay.stdin.destroyed) {
+          aplay.stdin.write(pcmBuffer);
+        }
       }
-    }
-    
-    if (msg.type === 'LIVE_TEXT_CHUNK' && msg.text) {
-      process.stdout.write(msg.text);
-    }
-    
-    if (msg.type === 'TURN_COMPLETE') {
-      console.log('\n✅ Fim da resposta.');
-    }
-  } catch (err) {
-    // Pode ser áudio binário ou JSON inválido, ignora
-  }
-});
+      
+      if (msg.type === 'LIVE_TEXT_CHUNK' && msg.text) {
+        process.stdout.write(msg.text);
+      }
+      
+      if (msg.type === 'TURN_COMPLETE') {
+        console.log('\n✅ Fim da resposta.\n');
+      }
+    } catch (err) {}
+  });
 
-ws.on('close', () => {
-  console.log('❌ Conexão com o servidor encerrada.');
-  if (arecord) arecord.kill();
-  if (aplay) aplay.kill();
-  process.exit(1);
-});
+  ws.on('close', () => {
+    console.log('⚠️ Conexão perdida. Tentando reconectar em 3s...');
+    if (arecord) { arecord.kill(); arecord = null; }
+    if (aplay) { aplay.kill(); aplay = null; }
+    if (!reconnectTimer) {
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null;
+        connect();
+      }, 3000);
+    }
+  });
 
-ws.on('error', (err) => {
-  console.error('❌ Erro no WebSocket:', err.message);
-});
+  ws.on('error', (err) => {
+    console.error('❌ Erro no WebSocket:', err.message);
+  });
+}
+
+connect();
 
 process.on('SIGINT', () => {
   console.log('Encerrando cliente local...');

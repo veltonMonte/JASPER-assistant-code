@@ -49,12 +49,9 @@ function connect() {
     
     // Se o navegador já estiver aberto, ele reproduz o áudio nativamente.
     // Ative ENABLE_APLAY=true apenas se estiver usando sem o navegador aberto para evitar voz duplicada/eco.
-    const enableAplay = process.env.ENABLE_APLAY === 'true';
-    if (enableAplay) {
-      aplay = spawn('aplay', ['-f', 'S16_LE', '-c', '1', '-r', '24000', '-t', 'raw']);
-    } else {
-      console.log('🔊 Áudio do alto-falante delegado para o navegador web (sem duplicar voz).');
-    }
+    // Mantém o aplay ativo tocando diretamente nas caixas de som do notebook
+    aplay = spawn('aplay', ['-f', 'S16_LE', '-c', '1', '-r', '24000', '-t', 'raw']);
+    console.log('🔊 Alto-falante ativo via aplay nas caixas do notebook.');
 
     arecord.stdout?.on('data', (chunk: Buffer) => {
       if (ws && ws.readyState === WebSocket.OPEN && !isAssistantSpeaking) {

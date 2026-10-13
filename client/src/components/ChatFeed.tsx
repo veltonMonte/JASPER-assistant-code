@@ -1,10 +1,11 @@
 import React, { useEffect, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import {
+  User, Bot, Zap, TrendingUp,
   Copy, Check, Loader2, CheckCircle2, AlertCircle, ShieldCheck, ShieldAlert,
   AlertTriangle, Edit3, X, Keyboard, Sparkles, Terminal, Search, BarChart2,
   Cpu, Brain, Activity, ChevronDown, ChevronUp, Clock, Globe, Image,
-  Maximize2, ExternalLink, TrendingUp
+  Maximize2, ExternalLink
 } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -50,7 +51,7 @@ const cleanText = (text: string) => {
   return cleaned;
 };
 
-const DEFAULT_SERIES_COLORS = ['#06b6d4', '#a855f7', '#10b981', '#f59e0b', '#ec4899', '#3b82f6'];
+const DEFAULT_SERIES_COLORS = ['#38bdf8', '#818cf8', '#34d399', '#f472b6', '#fbbf24', '#a78bfa', '#2dd4bf'];
 
 const CustomTooltip: React.FC<any> = ({ active, payload, label }) => {
   if (active && payload && payload.length) {

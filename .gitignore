@@ -4,3 +4,7 @@ dist/
 jasper.db
 *.log
 .DS_Store
+__pycache__/
+*.AppImage
+*.apk
+squashfs-root/

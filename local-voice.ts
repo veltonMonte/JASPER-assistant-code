@@ -18,19 +18,10 @@ function connect() {
   ws.on('open', () => {
     console.log('✅ Conectado ao servidor JASPER!');
     
-    // Dispositivo de entrada: prioriza Loopback (WO Mic) se disponível, senão usa padrão
-    let micDevice = '';
-    try {
-      const devices = execSync('arecord -l', { encoding: 'utf8' });
-      if (devices.includes('Loopback')) {
-        micDevice = 'plughw:CARD=Loopback,DEV=1,SUBDEV=0';
-        console.log('🎙️ Dispositivo de entrada: WO Mic detectado (Loopback)!');
-      } else {
-        console.log('🎙️ Dispositivo de entrada: Microfone padrão do sistema');
-      }
-    } catch (e) {
-      micDevice = '';
-    }
+    // Dispositivo de entrada: usa o microfone padrão do sistema (gerenciado pelo PipeWire)
+    // Suporta tanto o microfone do notebook quanto o WO Mic (via troca de source)
+    const micDevice = process.env.MIC_DEVICE || "";
+    console.log(`🎙️ Dispositivo de entrada: ${micDevice || "Padrão do Sistema (Notebook / WO Mic)"}`);
 
     if (arecord) {
       arecord.kill();

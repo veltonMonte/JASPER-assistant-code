@@ -139,6 +139,9 @@ export class JasperWebSocketServer {
             this.broadcastState('LISTENING');
           }
 
+          // Analisa energia do áudio para controle de silêncio e conclusão de turno
+          vadManager.processAudioEnergy(base64Pcm);
+
           if (this.geminiLive) {
             this.geminiLive.sendAudioChunk(base64Pcm, 16000);
           } else {

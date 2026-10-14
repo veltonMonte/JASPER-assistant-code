@@ -1,106 +1,209 @@
 #!/bin/bash
-DEFAULT_MIC="alsa_input.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.HiFi__hw_sofhdadsp_6__source"
-PHONE_IP="${1:-192.168.100.13}"
+# ==============================================================================
+# JASPER - WO Mic Intelligent Audio Bridge Service
+# Autodetecção de sub-rede, dispositivo ALSA Loopback e fallback automático
+# ==============================================================================
+
+set -u
+
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+MICCLIENT_BIN="$SCRIPT_DIR/micclient-x86_64.AppImage"
+BRIDGE_PID=""
+MICCLIENT_PID=""
 
-# Garante que o microfone interno esteja ativo e desmutado
-pactl set-source-mute "$DEFAULT_MIC" 0 2>/dev/null || true
-pactl set-default-source "$DEFAULT_MIC" 2>/dev/null || true
+# Descobre o microfone físico padrão do notebook
+find_notebook_mic() {
+  local cur
+  cur=$(pactl get-default-source 2>/dev/null || true)
+  if [ -n "$cur" ] && [[ "$cur" != *"womic"* ]] && [[ "$cur" != *"Loopback"* ]]; then
+    echo "$cur"
+    return
+  fi
+  local mic
+  mic=$(pactl list short sources 2>/dev/null | grep -i 'Digital' | awk '{print $2}' | head -n1)
+  if [ -z "$mic" ]; then
+    mic=$(pactl list short sources 2>/dev/null | grep 'alsa_input' | grep -v -iE 'loopback|womic' | tail -n1 | awk '{print $2}')
+  fi
+  if [ -z "$mic" ]; then
+    mic="alsa_input.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.HiFi__hw_sofhdadsp_6__source"
+  fi
+  echo "$mic"
+}
 
+DEFAULT_MIC=$(find_notebook_mic)
+echo "🎙️ Microfone padrão do notebook detectado: $DEFAULT_MIC"
+
+# Descobre dinamicamente o dispositivo ALSA Loopback
+find_loopback_device() {
+  local card_num
+  card_num=$(awk '/Loopback/ {print $1; exit}' /proc/asound/cards 2>/dev/null || true)
+  if [ -n "$card_num" ]; then
+    echo "plughw:${card_num},1"
+  else
+    echo "plughw:CARD=Loopback,DEV=1"
+  fi
+}
+
+# Notifica o backend do JASPER sobre a alteração do microfone
+notify_backend() {
+  local mic_type="$1"
+  curl -s -X POST http://127.0.0.1:3000/api/audio/mic-status \
+    -H "Content-Type: application/json" \
+    -d "{\"activeMic\":\"$mic_type\"}" >/dev/null 2>&1 || true
+}
+
+# Configura nós virtuais PipeWire/PulseAudio
 setup_womic_nodes() {
-  # Cria o null-sink womic_mic se não existir
-  if ! pactl list short sinks | grep -q "womic_mic"; then
+  if ! pactl list short sinks 2>/dev/null | grep -q "womic_mic"; then
     pactl load-module module-null-sink sink_name=womic_mic sink_properties=device.description="WOMic" 2>/dev/null || true
   fi
-  # Cria o remap-source womic_source se não existir
-  if ! pactl list short sources | grep -q "womic_source"; then
+  if ! pactl list short sources 2>/dev/null | grep -q "womic_source"; then
     pactl load-module module-remap-source master=womic_mic.monitor source_name=womic_source source_properties=device.description="WO_Mic" 2>/dev/null || true
   fi
 }
 
+# Move todos os fluxos de gravação ativos (navegador, etc) para uma fonte
+move_active_recording_streams() {
+  local target_source="$1"
+  for stream_id in $(pactl list short source-outputs 2>/dev/null | awk '{print $1}'); do
+    pactl move-source-output "$stream_id" "$target_source" 2>/dev/null || true
+  done
+}
+
 start_audio_bridge() {
-  # Mata bridges antigas se houver
-  pkill -f "arecord -D plughw:1,1" 2>/dev/null || true
-  # Inicia bridge ALSA plughw:1,1 -> PipeWire womic_mic
-  nohup arecord -D plughw:1,1 -f S16_LE -r 48000 -c 1 -q 2>/dev/null | pacat -p --raw --format=s16le --rate=48000 --channels=1 -d womic_mic >/dev/null 2>&1 &
+  pkill -f "arecord.*Loopback" 2>/dev/null || true
+  pkill -f "pacat -p.*womic_mic" 2>/dev/null || true
+  
+  local loopback_dev
+  loopback_dev=$(find_loopback_device)
+  echo "🔗 Iniciando bridge de áudio: $loopback_dev -> PipeWire womic_mic..."
+  
+  nohup arecord -D "$loopback_dev" -f S16_LE -r 48000 -c 1 -q 2>/dev/null | \
+    pacat -p --raw --format=s16le --rate=48000 --channels=1 -d womic_mic >/dev/null 2>&1 &
   BRIDGE_PID=$!
+  
   sleep 0.5
   pactl set-default-source womic_source 2>/dev/null || true
-  # Conecta streams ativos do Firefox diretamente ao womic_source
-  pw-link womic_source:capture_FL Firefox:input_FL 2>/dev/null || true
-  pw-link womic_source:capture_FR Firefox:input_FR 2>/dev/null || true
-  pw-link -d alsa_input.platform-snd_aloop.0.analog-stereo:capture_FL Firefox:input_FL 2>/dev/null || true
-  pw-link -d alsa_input.platform-snd_aloop.0.analog-stereo:capture_FR Firefox:input_FR 2>/dev/null || true
+  move_active_recording_streams "womic_source"
+  notify_backend "womic"
+  echo "✅ Áudio do WO Mic roteado com sucesso para o sistema e aplicativos!"
 }
 
 stop_audio_bridge() {
   if [ -n "$BRIDGE_PID" ]; then
     kill "$BRIDGE_PID" 2>/dev/null || true
+    BRIDGE_PID=""
   fi
-  pkill -f "arecord -D plughw:1,1" 2>/dev/null || true
+  pkill -f "arecord.*Loopback" 2>/dev/null || true
+  pkill -f "pacat -p.*womic_mic" 2>/dev/null || true
+  
+  DEFAULT_MIC=$(find_notebook_mic)
   pactl set-default-source "$DEFAULT_MIC" 2>/dev/null || true
-  # Reconecta Firefox ao microfone padrão do notebook se estiver ativo
-  pw-link "$DEFAULT_MIC:capture_FL" Firefox:input_FL 2>/dev/null || true
-  pw-link "$DEFAULT_MIC:capture_FR" Firefox:input_FR 2>/dev/null || true
-  pw-link -d womic_source:capture_FL Firefox:input_FL 2>/dev/null || true
-  pw-link -d womic_source:capture_FR Firefox:input_FR 2>/dev/null || true
+  move_active_recording_streams "$DEFAULT_MIC"
+  notify_backend "notebook"
+  echo "🔙 Microfone do notebook restaurado ($DEFAULT_MIC)."
 }
 
+# Varre dinamicamente todas as sub-redes ativas em busca do WO Mic (porta 8125)
 find_womic_ip() {
   python3 -c '
-import socket
+import socket, subprocess, ipaddress
 from concurrent.futures import ThreadPoolExecutor
 
-def check_ip(ip):
-    s = socket.socket()
-    s.settimeout(0.2)
+def get_subnets():
     try:
-        if s.connect_ex((ip, 8125)) == 0:
-            return ip
-    except:
+        out = subprocess.check_output(["ip", "-4", "-o", "addr", "show", "scope", "global"]).decode()
+    except Exception:
+        return []
+    subnets = []
+    for line in out.strip().split("\n"):
+        parts = line.split()
+        if len(parts) >= 4:
+            iface = parts[1]
+            cidr = parts[3]
+            if not any(iface.startswith(x) for x in ["docker", "br-", "veth", "tailscale", "lo"]):
+                try:
+                    subnets.append(ipaddress.ip_network(cidr, strict=False))
+                except Exception:
+                    pass
+    return subnets
+
+def check_ip(ip):
+    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    s.settimeout(0.18)
+    try:
+        if s.connect_ex((str(ip), 8125)) == 0:
+            return str(ip)
+    except Exception:
         pass
     finally:
         s.close()
     return None
 
-ips = [f"192.168.100.{i}" for i in range(1, 255)]
-with ThreadPoolExecutor(max_workers=30) as ex:
-    for ip in ex.map(check_ip, ips):
-        if ip:
-            print(ip)
-            break
-' 2>/dev/null
+for net in get_subnets():
+    hosts = list(net.hosts())
+    if len(hosts) > 1024:
+        continue
+    with ThreadPoolExecutor(max_workers=60) as ex:
+        for res in ex.map(check_ip, hosts):
+            if res:
+                print(res)
+                exit(0)
+' 2>/dev/null || true
 }
+
+cleanup() {
+  echo "🛑 Encerrando serviço WO Mic..."
+  if [ -n "$MICCLIENT_PID" ]; then
+    kill "$MICCLIENT_PID" 2>/dev/null || true
+  fi
+  stop_audio_bridge
+  exit 0
+}
+
+trap cleanup SIGINT SIGTERM EXIT
 
 setup_womic_nodes
 
+PREV_TARGET_IP="${1:-}"
+
 while true; do
-  TARGET_IP="$PHONE_IP"
-  if ! nc -z -w 1 "$TARGET_IP" 8125 2>/dev/null; then
+  TARGET_IP="$PREV_TARGET_IP"
+  
+  if [ -z "$TARGET_IP" ] || ! nc -z -w 1 "$TARGET_IP" 8125 2>/dev/null; then
     DISCOVERED=$(find_womic_ip)
     if [ -n "$DISCOVERED" ]; then
       TARGET_IP="$DISCOVERED"
+      PREV_TARGET_IP="$DISCOVERED"
     fi
   fi
 
-  if nc -z -w 1 "$TARGET_IP" 8125 2>/dev/null; then
-    echo "📱 Conectando ao WO Mic em $TARGET_IP:8125..."
+  if [ -n "$TARGET_IP" ] && nc -z -w 1 "$TARGET_IP" 8125 2>/dev/null; then
+    echo "📱 WO Mic detectado em $TARGET_IP:8125! Conectando cliente..."
     setup_womic_nodes
     
-    # Inicia micclient em background
-    "$SCRIPT_DIR/micclient-x86_64.AppImage" -t Wifi "$TARGET_IP" &
+    # Executa micclient
+    "$MICCLIENT_BIN" -t Wifi "$TARGET_IP" &
     MICCLIENT_PID=$!
     
     sleep 1
     start_audio_bridge
     
-    # Aguarda micclient finalizar
+    # Aguarda o processo do micclient
     wait "$MICCLIENT_PID" 2>/dev/null || true
+    MICCLIENT_PID=""
     
-    echo "⚠️ WO Mic desconectado. Restaurando microfone do notebook..."
+    echo "⚠️ WO Mic desconectado. Revertendo para o microfone do notebook..."
     stop_audio_bridge
   else
-    pactl set-default-source "$DEFAULT_MIC" 2>/dev/null || true
+    # Sem WO Mic ativo: garante microfone do notebook
+    DEFAULT_MIC=$(find_notebook_mic)
+    cur_def=$(pactl get-default-source 2>/dev/null || true)
+    if [[ "$cur_def" == *"womic"* ]]; then
+      pactl set-default-source "$DEFAULT_MIC" 2>/dev/null || true
+      move_active_recording_streams "$DEFAULT_MIC"
+      notify_backend "notebook"
+    fi
   fi
-  sleep 2
+  sleep 3
 done

@@ -15,14 +15,14 @@ MICCLIENT_PID=""
 find_notebook_mic() {
   local cur
   cur=$(pactl get-default-source 2>/dev/null || true)
-  if [ -n "$cur" ] && [[ "$cur" != *"womic"* ]] && [[ "$cur" != *"Loopback"* ]]; then
+  if [ -n "$cur" ] && [[ "$cur" != *"womic"* ]] && [[ "$cur" != *"Loopback"* ]] && [[ "$cur" != *"aloop"* ]]; then
     echo "$cur"
     return
   fi
   local mic
-  mic=$(pactl list short sources 2>/dev/null | grep -i 'Digital' | awk '{print $2}' | head -n1)
+  mic=$(pactl list short sources 2>/dev/null | grep -iE 'sofhdadsp.*source' | awk '{print $2}' | head -n1)
   if [ -z "$mic" ]; then
-    mic=$(pactl list short sources 2>/dev/null | grep 'alsa_input' | grep -v -iE 'loopback|womic' | tail -n1 | awk '{print $2}')
+    mic=$(pactl list short sources 2>/dev/null | grep 'alsa_input' | grep -v -iE 'loopback|womic|aloop' | tail -n1 | awk '{print $2}')
   fi
   if [ -z "$mic" ]; then
     mic="alsa_input.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.HiFi__hw_sofhdadsp_6__source"

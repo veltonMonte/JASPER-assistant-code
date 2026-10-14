@@ -227,6 +227,20 @@ export const geminiToolDeclarations = [
     },
   },
   {
+    name: 'renderizar_tabela',
+    description: 'Renderiza uma tabela rica, interativa e estilizada no chat com ordenação e busca. Use OBRIGATORIAMENTE sempre que o usuário pedir para gerar, mandar ou ver tabelas, rankings, classificações (ex: top 10 filmes, tabela da série A do Brasileirão, comparativos).',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        tableConfig: {
+          type: 'STRING',
+          description: 'String JSON contendo { title, columns: [{ key, label, align? }], rows: [Record<string, any>] }.',
+        },
+      },
+      required: ['tableConfig'],
+    },
+  },
+  {
     name: 'renderizar_grafico',
     description: 'Renderiza um gráfico interativo (barras, linhas ou área) na interface. Use OBRIGATORIAMENTE sempre que o usuário pedir para gerar, montar ou ver gráficos, estatísticas de pesquisas eleitorais, comparativos ou dados numéricos visuais.',
     parameters: {
@@ -371,6 +385,20 @@ export async function executeToolByName(name: string, args: Record<string, any> 
           });
         }
         result = { chartConfig: finalConfig, success: true, message: 'Gráfico interativo gerado e renderizado com sucesso.' };
+        break;
+      }
+      case 'renderizar_tabela': {
+        let finalConfig = args.tableConfig;
+        if (typeof finalConfig === 'object') {
+          finalConfig = JSON.stringify(finalConfig);
+        } else if (!finalConfig && (args.columns || args.rows || args.data)) {
+          finalConfig = JSON.stringify({
+            title: args.title || 'Tabela de Dados',
+            columns: args.columns || [],
+            rows: args.rows || args.data || [],
+          });
+        }
+        result = { tableConfig: finalConfig, success: true, message: 'Tabela interativa gerada e renderizada com sucesso.' };
         break;
       }
       case 'renderizar_video':

@@ -1,16 +1,21 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useMemo } from 'react';
 import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import {
   User, Bot, Zap, TrendingUp,
   Copy, Check, Loader2, CheckCircle2, AlertCircle, ShieldCheck, ShieldAlert,
   AlertTriangle, Edit3, X, Keyboard, Sparkles, Terminal, Search, BarChart2,
   Cpu, Brain, Activity, ChevronDown, ChevronUp, Clock, Globe, Image,
-  Maximize2, ExternalLink
+  Maximize2, Minimize2, ExternalLink, PieChart as PieIcon, Compass, Table as TableIcon,
+  ArrowUpDown, Download, Filter, Trophy, Star, Award, Layers, Grid, FileSpreadsheet,
+  LayoutList
 } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import {
-  LineChart, Line, BarChart, Bar, AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer
+  LineChart, Line, BarChart, Bar, AreaChart, Area, PieChart, Pie, Cell,
+  RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar,
+  XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, LabelList
 } from 'recharts';
 import Orb from './Orb';
 export interface Message {
@@ -51,23 +56,78 @@ const cleanText = (text: string) => {
   return cleaned;
 };
 
-const DEFAULT_SERIES_COLORS = ['#38bdf8', '#818cf8', '#34d399', '#f472b6', '#fbbf24', '#a78bfa', '#2dd4bf'];
+const DEFAULT_SERIES_COLORS = [
+  '#06b6d4', '#8b5cf6', '#10b981', '#f59e0b', '#ec4899', '#3b82f6', '#14b8a6', '#f43f5e'
+];
+
+/**
+ * Custom XAxis Tick that handles angled text and prevents overlapping words
+ */
+const CustomXAxisTick: React.FC<any> = ({ x, y, payload, shouldRotate }) => {
+  if (!payload || payload.value === undefined) return null;
+  const rawVal = String(payload.value);
+  const maxChars = shouldRotate ? 14 : 10;
+  const displayVal = rawVal.length > maxChars ? rawVal.slice(0, maxChars - 1) + '…' : rawVal;
+
+  if (shouldRotate) {
+    return (
+      <g transform={`translate(${x},${y})`}>
+        <title>{rawVal}</title>
+        <text
+          x={0}
+          y={0}
+          dx={-8}
+          dy={10}
+          textAnchor="end"
+          fill="#94a3b8"
+          fontSize={11}
+          fontWeight={500}
+          transform="rotate(-35)"
+        >
+          {displayVal}
+        </text>
+      </g>
+    );
+  }
+
+  return (
+    <g transform={`translate(${x},${y})`}>
+      <title>{rawVal}</title>
+      <text
+        x={0}
+        y={0}
+        dy={14}
+        textAnchor="middle"
+        fill="#94a3b8"
+        fontSize={11}
+        fontWeight={500}
+      >
+        {displayVal}
+      </text>
+    </g>
+  );
+};
 
 const CustomTooltip: React.FC<any> = ({ active, payload, label }) => {
   if (active && payload && payload.length) {
     return (
       <div className="chart-tooltip-glass">
-        <div className="tooltip-header">{label}</div>
+        <div className="tooltip-header">
+          <span className="tooltip-header-label">{label}</span>
+        </div>
         <div className="tooltip-body">
-          {payload.map((entry: any, idx: number) => (
-            <div key={`item-${idx}`} className="tooltip-row">
-              <span className="tooltip-dot" style={{ backgroundColor: entry.color || entry.fill || '#06b6d4' }} />
-              <span className="tooltip-label">{entry.name}:</span>
-              <span className="tooltip-val">
-                {typeof entry.value === 'number' ? entry.value.toLocaleString() : entry.value}
-              </span>
-            </div>
-          ))}
+          {payload.map((entry: any, idx: number) => {
+            const color = entry.color || entry.fill || '#06b6d4';
+            const val = entry.value;
+            const formattedVal = typeof val === 'number' ? val.toLocaleString('pt-BR') : val;
+            return (
+              <div key={`item-${idx}`} className="tooltip-row">
+                <span className="tooltip-dot" style={{ backgroundColor: color, boxShadow: `0 0 8px ${color}` }} />
+                <span className="tooltip-label">{entry.name || 'Valor'}:</span>
+                <span className="tooltip-val">{formattedVal}</span>
+              </div>
+            );
+          })}
         </div>
       </div>
     );
@@ -75,23 +135,300 @@ const CustomTooltip: React.FC<any> = ({ active, payload, label }) => {
   return null;
 };
 
+interface InteractiveTableProps {
+  jsonStr?: string;
+  title?: string;
+  columns?: Array<{ key: string; label: string; align?: 'left' | 'center' | 'right' }>;
+  rows?: Array<Record<string, any>>;
+  isEmbedded?: boolean;
+}
+
+const InteractiveTable: React.FC<InteractiveTableProps> = ({
+  jsonStr,
+  title: initialTitle,
+  columns: initialCols,
+  rows: initialRows,
+  isEmbedded = false
+}) => {
+  const [searchTerm, setSearchTerm] = useState('');
+  const [sortCol, setSortCol] = useState<string | null>(null);
+  const [sortDir, setSortDir] = useState<'asc' | 'desc' | 'none'>('none');
+  const [copied, setCopied] = useState(false);
+
+  let title = initialTitle || 'Tabela de Dados';
+  let columns = initialCols || [];
+  let rows = initialRows || [];
+
+  if (jsonStr) {
+    try {
+      const parsed = JSON.parse(jsonStr);
+      if (parsed.title) title = parsed.title;
+      if (Array.isArray(parsed.columns)) columns = parsed.columns;
+      if (Array.isArray(parsed.rows)) rows = parsed.rows;
+      else if (Array.isArray(parsed.data)) rows = parsed.data;
+    } catch (e) {
+      return <div className="chart-error-card">Estrutura de tabela JSON inválida.</div>;
+    }
+  }
+
+  // Auto infer columns if not provided
+  if (columns.length === 0 && rows.length > 0) {
+    columns = Object.keys(rows[0]).map(k => ({
+      key: k,
+      label: k.toUpperCase(),
+      align: typeof rows[0][k] === 'number' ? 'right' : 'left'
+    }));
+  }
+
+  const handleSort = (colKey: string) => {
+    if (sortCol !== colKey) {
+      setSortCol(colKey);
+      setSortDir('asc');
+    } else if (sortDir === 'asc') {
+      setSortDir('desc');
+    } else {
+      setSortCol(null);
+      setSortDir('none');
+    }
+  };
+
+  const filteredRows = rows.filter(row => {
+    if (!searchTerm.trim()) return true;
+    const term = searchTerm.toLowerCase();
+    return Object.values(row).some(v => String(v ?? '').toLowerCase().includes(term));
+  });
+
+  const sortedRows = [...filteredRows].sort((a, b) => {
+    if (!sortCol || sortDir === 'none') return 0;
+    const valA = a[sortCol];
+    const valB = b[sortCol];
+
+    const numA = Number(valA);
+    const numB = Number(valB);
+
+    if (!isNaN(numA) && !isNaN(numB)) {
+      return sortDir === 'asc' ? numA - numB : numB - numA;
+    }
+
+    const strA = String(valA ?? '').toLowerCase();
+    const strB = String(valB ?? '').toLowerCase();
+    return sortDir === 'asc' ? strA.localeCompare(strB) : strB.localeCompare(strA);
+  });
+
+  const handleCopyTable = () => {
+    const headerStr = columns.map(c => c.label).join('	');
+    const rowsStr = sortedRows.map(r => columns.map(c => String(r[c.key] ?? '')).join('	')).join("\n");
+    navigator.clipboard.writeText(`${title}\n${headerStr}\n${rowsStr}`);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleExportCSV = () => {
+    const headerStr = columns.map(c => `"${c.label.replace(/"/g, '""')}"`).join(',');
+    const rowsStr = sortedRows.map(r => columns.map(c => `"${String(r[c.key] ?? '').replace(/"/g, '""')}"`).join(',')).join("\n");
+    const blob = new Blob([`${headerStr}\n${rowsStr}`], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${title.replace(/\s+/g, '_').toLowerCase()}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  const renderCellContent = (colKey: string, val: any) => {
+    const k = colKey.toLowerCase();
+    const isRankCol = ['pos', 'posicao', 'rank', '#', 'colocacao'].includes(k);
+    const isRatingCol = ['nota', 'rating', 'score', 'avaliacao'].includes(k);
+
+    const numVal = Number(val);
+
+    if (isRankCol) {
+      if (val === 1 || numVal === 1) {
+        return <span className="rank-badge gold"><Trophy size={11} /> 1º</span>;
+      }
+      if (val === 2 || numVal === 2) {
+        return <span className="rank-badge silver"><Award size={11} /> 2º</span>;
+      }
+      if (val === 3 || numVal === 3) {
+        return <span className="rank-badge bronze"><Award size={11} /> 3º</span>;
+      }
+      if (numVal >= 4 && numVal <= 6) {
+        return <span className="rank-badge g4">{numVal}º</span>;
+      }
+      if (numVal >= 17 && rows.length >= 18) {
+        return <span className="rank-badge z4">{numVal}º</span>;
+      }
+      return <span className="rank-badge standard">{val}º</span>;
+    }
+
+    if (isRatingCol) {
+      return (
+        <span className="rating-badge">
+          <Star size={11} className="rating-star" />
+          <span>{String(val)}</span>
+        </span>
+      );
+    }
+
+    if (typeof val === 'number') {
+      return <span className="table-numeric-val">{val.toLocaleString('pt-BR')}</span>;
+    }
+
+    return String(val ?? '—');
+  };
+
+  return (
+    <div className={`interactive-table-card ${isEmbedded ? 'embedded' : ''}`}>
+      <div className="table-header-bar">
+        <div className="table-title-group">
+          <div className="table-icon-badge">
+            <TableIcon size={16} />
+          </div>
+          <div>
+            <h4 className="table-card-title">{title}</h4>
+            <div className="table-meta-tags">
+              <span className="table-count-badge">{sortedRows.length} registros</span>
+              {searchTerm && <span className="table-filtered-badge">Filtro: "{searchTerm}"</span>}
+            </div>
+          </div>
+        </div>
+
+        <div className="table-actions-group">
+          <div className="table-search-box">
+            <Search size={13} className="search-icon" />
+            <input
+              type="text"
+              placeholder="Filtrar dados..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              className="table-search-input"
+            />
+            {searchTerm && (
+              <button onClick={() => setSearchTerm('')} className="clear-search-btn">
+                <X size={12} />
+              </button>
+            )}
+          </div>
+
+          <button onClick={handleExportCSV} className="btn-table-action" title="Exportar como CSV">
+            <Download size={13} />
+            <span>CSV</span>
+          </button>
+
+          <button onClick={handleCopyTable} className="btn-table-action" title="Copiar Tabela">
+            {copied ? <Check size={13} style={{ color: '#10b981' }} /> : <Copy size={13} />}
+            <span>{copied ? 'Copiado' : 'Copiar'}</span>
+          </button>
+        </div>
+      </div>
+
+      <div className="table-scroll-container">
+        <table className="interactive-data-table">
+          <thead>
+            <tr>
+              {columns.map((col) => {
+                const isSorted = sortCol === col.key;
+                const align = col.align || (col.key === 'pos' || col.key === '#' ? 'center' : 'left');
+                return (
+                  <th
+                    key={col.key}
+                    onClick={() => handleSort(col.key)}
+                    className={`th-interactive align-${align} ${isSorted ? 'sorted' : ''}`}
+                  >
+                    <div className="th-content">
+                      <span>{col.label}</span>
+                      <span className="sort-icon-box">
+                        {isSorted ? (
+                          sortDir === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />
+                        ) : (
+                          <ArrowUpDown size={11} className="dim" />
+                        )}
+                      </span>
+                    </div>
+                  </th>
+                );
+              })}
+            </tr>
+          </thead>
+          <tbody>
+            {sortedRows.length > 0 ? (
+              sortedRows.map((row, rIdx) => (
+                <tr key={`row-${rIdx}`} className="tr-interactive">
+                  {columns.map((col) => {
+                    const align = col.align || (col.key === 'pos' || col.key === '#' ? 'center' : 'left');
+                    return (
+                      <td key={col.key} className={`td-interactive align-${align}`}>
+                        {renderCellContent(col.key, row[col.key])}
+                      </td>
+                    );
+                  })}
+                </tr>
+              ))
+            ) : (
+              <tr>
+                <td colSpan={columns.length} className="table-empty-row">
+                  Nenhum dado encontrado para "{searchTerm}".
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
 const ChartComponent: React.FC<{ jsonStr: string }> = ({ jsonStr }) => {
   const [copied, setCopied] = useState(false);
-  const [chartTypeState, setChartTypeState] = useState<'line' | 'bar' | 'area'>('bar');
+  const [chartTypeState, setChartTypeState] = useState<'bar' | 'bar-horizontal' | 'line' | 'area' | 'pie' | 'table'>('bar');
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   try {
     const config = JSON.parse(jsonStr);
-    const { type = 'bar', data, xKey = 'name', series = [], title = 'Visualização de Dados' } = config;
+    const { type = 'bar', data = [], xKey = 'name', series = [], title = 'Visualização de Dados' } = config;
+
+    const avgLen = data.length > 0 ? (data.reduce((acc: number, d: any) => acc + String(d[xKey] || '').length, 0) / data.length) : 0;
+    const maxLen = data.length > 0 ? Math.max(...data.map((d: any) => String(d[xKey] || '').length)) : 0;
+    const shouldRotate = data.length > 3 && (maxLen > 6 || avgLen > 7);
 
     useEffect(() => {
-      if (type === 'line' || type === 'bar' || type === 'area') {
+      if (type === 'line' || type === 'area' || type === 'pie') {
         setChartTypeState(type);
+      } else if (type === 'bar' || type === 'horizontal' || type === 'bar-horizontal') {
+        if (data.length >= 6 || avgLen > 9) {
+          setChartTypeState('bar-horizontal');
+        } else {
+          setChartTypeState('bar');
+        }
       }
-    }, [type]);
+    }, [type, data.length, avgLen]);
 
-    if (!data || !Array.isArray(data) || !series || !Array.isArray(series)) {
-      return <div className="chart-error-card">Configuração de gráfico Recharts inválida ou incompleta.</div>;
+    if (!data || !Array.isArray(data) || data.length === 0) {
+      return <div className="chart-error-card">Nenhum dado numérico disponível para o gráfico.</div>;
     }
+
+    const finalSeries = Array.isArray(series) && series.length > 0 ? series : [
+      { dataKey: Object.keys(data[0]).find(k => k !== xKey && typeof data[0][k] === 'number') || 'valor', name: 'Valor', color: '#06b6d4' }
+    ];
+
+    const primaryKey = finalSeries[0]?.dataKey;
+    let leaderItem: any = null;
+    let minItem: any = null;
+    let sumVal = 0;
+    let numCount = 0;
+
+    data.forEach((d: any) => {
+      const val = Number(d[primaryKey]);
+      if (!isNaN(val)) {
+        sumVal += val;
+        numCount++;
+        if (!leaderItem || val > Number(leaderItem[primaryKey])) leaderItem = d;
+        if (!minItem || val < Number(minItem[primaryKey])) minItem = d;
+      }
+    });
+
+    const avgVal = numCount > 0 ? (sumVal / numCount) : 0;
 
     const handleCopyJSON = () => {
       navigator.clipboard.writeText(jsonStr);
@@ -99,30 +436,76 @@ const ChartComponent: React.FC<{ jsonStr: string }> = ({ jsonStr }) => {
       setTimeout(() => setCopied(false), 2000);
     };
 
+    const handleExportCSV = () => {
+      const headers = [xKey, ...finalSeries.map((s: any) => s.dataKey)].join(',');
+      const rows = data.map((d: any) => [
+        `"${String(d[xKey] || '').replace(/"/g, '""')}"`,
+        ...finalSeries.map((s: any) => d[s.dataKey] ?? '')
+      ].join(',')).join("\n");
+      const csvContent = `${headers}\n${rows}`;
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${title.replace(/\s+/g, '_').toLowerCase()}.csv`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    };
+
     const renderChart = () => {
       const activeType = chartTypeState;
 
+      if (activeType === 'table') {
+        const tableCols = [
+          { key: xKey, label: xKey.toUpperCase() },
+          ...finalSeries.map((s: any) => ({ key: s.dataKey, label: s.name || s.dataKey }))
+        ];
+        return (
+          <div style={{ marginTop: '8px' }}>
+            <InteractiveTable
+              title={title}
+              columns={tableCols}
+              rows={data}
+              isEmbedded={true}
+            />
+          </div>
+        );
+      }
+
+      const chartHeight = activeType === 'bar-horizontal' 
+        ? Math.max(300, Math.min(520, data.length * 36 + 60))
+        : 330;
+
       return (
-        <ResponsiveContainer width="100%" height={290}>
+        <ResponsiveContainer width="100%" height={chartHeight}>
           {activeType === 'line' ? (
-            <LineChart data={data} margin={{ top: 15, right: 45, left: 10, bottom: 20 }}>
+            <LineChart data={data} margin={{ top: 20, right: 35, left: 10, bottom: shouldRotate ? 45 : 20 }}>
               <defs>
-                {series.map((s: any, idx: number) => {
+                {finalSeries.map((s: any, idx: number) => {
                   const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
                   return (
-                    <linearGradient key={`grad-${idx}`} id={`lineGrad-${idx}`} x1="0" y1="0" x2="0" y2="1">
+                    <linearGradient key={`lineGrad-${idx}`} id={`lineGrad-${idx}`} x1="0" y1="0" x2="0" y2="1">
                       <stop offset="5%" stopColor={color} stopOpacity={0.4} />
                       <stop offset="95%" stopColor={color} stopOpacity={0.0} />
                     </linearGradient>
                   );
                 })}
               </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.07)" vertical={false} />
-              <XAxis dataKey={xKey} stroke="#64748b" tick={{ fill: '#94a3b8', fontSize: 11 }} padding={{ left: 15, right: 30 }} axisLine={false} tickLine={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.06)" vertical={false} />
+              <XAxis
+                dataKey={xKey}
+                stroke="#64748b"
+                tick={<CustomXAxisTick shouldRotate={shouldRotate} />}
+                height={shouldRotate ? 65 : 30}
+                interval={0}
+                axisLine={{ stroke: 'rgba(255, 255, 255, 0.1)' }}
+                tickLine={false}
+              />
               <YAxis stroke="#64748b" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
               <Tooltip content={<CustomTooltip />} />
-              <Legend wrapperStyle={{ color: '#cbd5e1', paddingTop: '12px', fontSize: '13px' }} />
-              {series.map((s: any, idx: number) => {
+              <Legend wrapperStyle={{ color: '#cbd5e1', paddingTop: '12px', fontSize: '12px' }} />
+              {finalSeries.map((s: any, idx: number) => {
                 const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
                 return (
                   <Line
@@ -133,30 +516,38 @@ const ChartComponent: React.FC<{ jsonStr: string }> = ({ jsonStr }) => {
                     name={s.name || s.dataKey}
                     strokeWidth={3}
                     dot={{ r: 4, strokeWidth: 2, fill: '#0f172a', stroke: color }}
-                    activeDot={{ r: 7, strokeWidth: 0, fill: color }}
+                    activeDot={{ r: 7, strokeWidth: 2, fill: color, stroke: '#fff' }}
                   />
                 );
               })}
             </LineChart>
           ) : activeType === 'area' ? (
-            <AreaChart data={data} margin={{ top: 15, right: 45, left: 10, bottom: 20 }}>
+            <AreaChart data={data} margin={{ top: 20, right: 35, left: 10, bottom: shouldRotate ? 45 : 20 }}>
               <defs>
-                {series.map((s: any, idx: number) => {
+                {finalSeries.map((s: any, idx: number) => {
                   const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
                   return (
-                    <linearGradient key={`grad-area-${idx}`} id={`areaGrad-${idx}`} x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={color} stopOpacity={0.6} />
-                      <stop offset="95%" stopColor={color} stopOpacity={0.05} />
+                    <linearGradient key={`areaGrad-${idx}`} id={`areaGrad-${idx}`} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor={color} stopOpacity={0.65} />
+                      <stop offset="95%" stopColor={color} stopOpacity={0.02} />
                     </linearGradient>
                   );
                 })}
               </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.07)" vertical={false} />
-              <XAxis dataKey={xKey} stroke="#64748b" tick={{ fill: '#94a3b8', fontSize: 11 }} padding={{ left: 15, right: 30 }} axisLine={false} tickLine={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.06)" vertical={false} />
+              <XAxis
+                dataKey={xKey}
+                stroke="#64748b"
+                tick={<CustomXAxisTick shouldRotate={shouldRotate} />}
+                height={shouldRotate ? 65 : 30}
+                interval={0}
+                axisLine={{ stroke: 'rgba(255, 255, 255, 0.1)' }}
+                tickLine={false}
+              />
               <YAxis stroke="#64748b" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
               <Tooltip content={<CustomTooltip />} />
-              <Legend wrapperStyle={{ color: '#cbd5e1', paddingTop: '12px', fontSize: '13px' }} />
-              {series.map((s: any, idx: number) => {
+              <Legend wrapperStyle={{ color: '#cbd5e1', paddingTop: '12px', fontSize: '12px' }} />
+              {finalSeries.map((s: any, idx: number) => {
                 const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
                 return (
                   <Area
@@ -166,30 +557,116 @@ const ChartComponent: React.FC<{ jsonStr: string }> = ({ jsonStr }) => {
                     stroke={color}
                     fill={`url(#areaGrad-${idx})`}
                     name={s.name || s.dataKey}
-                    strokeWidth={2}
+                    strokeWidth={2.5}
                   />
                 );
               })}
             </AreaChart>
-          ) : (
-            <BarChart data={data} margin={{ top: 15, right: 45, left: 10, bottom: 20 }}>
+          ) : activeType === 'bar-horizontal' ? (
+            <BarChart
+              layout="vertical"
+              data={data}
+              margin={{ top: 15, right: 45, left: 15, bottom: 15 }}
+            >
               <defs>
-                {series.map((s: any, idx: number) => {
+                {finalSeries.map((s: any, idx: number) => {
                   const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
                   return (
-                    <linearGradient key={`grad-bar-${idx}`} id={`barGrad-${idx}`} x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={color} stopOpacity={0.9} />
+                    <linearGradient key={`barHorizGrad-${idx}`} id={`barHorizGrad-${idx}`} x1="0" y1="0" x2="1" y2="0">
+                      <stop offset="0%" stopColor={color} stopOpacity={0.95} />
+                      <stop offset="100%" stopColor={color} stopOpacity={0.6} />
+                    </linearGradient>
+                  );
+                })}
+              </defs>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.06)" horizontal={false} />
+              <XAxis type="number" stroke="#64748b" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis
+                type="category"
+                dataKey={xKey}
+                stroke="#64748b"
+                tick={{ fill: '#cbd5e1', fontSize: 11, fontWeight: 500 }}
+                width={130}
+                tickFormatter={(val) => {
+                  const s = String(val);
+                  return s.length > 18 ? s.slice(0, 16) + '…' : s;
+                }}
+                axisLine={{ stroke: 'rgba(255, 255, 255, 0.1)' }}
+                tickLine={false}
+              />
+              <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(255, 255, 255, 0.04)', radius: 6 }} />
+              <Legend wrapperStyle={{ color: '#cbd5e1', paddingTop: '10px', fontSize: '12px' }} />
+              {finalSeries.map((s: any, idx: number) => {
+                const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
+                return (
+                  <Bar
+                    key={s.dataKey}
+                    dataKey={s.dataKey}
+                    fill={`url(#barHorizGrad-${idx})`}
+                    stroke={color}
+                    strokeWidth={1}
+                    name={s.name || s.dataKey}
+                    radius={[0, 6, 6, 0]}
+                    maxBarSize={30}
+                  >
+                    <LabelList dataKey={s.dataKey} position="right" fill="#94a3b8" fontSize={10} fontWeight={600} />
+                  </Bar>
+                );
+              })}
+            </BarChart>
+          ) : activeType === 'pie' ? (
+            <PieChart margin={{ top: 15, right: 15, bottom: 15, left: 15 }}>
+              <Tooltip content={<CustomTooltip />} />
+              <Legend wrapperStyle={{ color: '#cbd5e1', paddingTop: '12px', fontSize: '12px' }} />
+              <Pie
+                data={data}
+                dataKey={finalSeries[0]?.dataKey || 'value'}
+                nameKey={xKey}
+                cx="50%"
+                cy="50%"
+                innerRadius={60}
+                outerRadius={100}
+                paddingAngle={3}
+                label={({ percent }: any) => `${(percent * 100).toFixed(0)}%`}
+                labelLine={false}
+              >
+                {data.map((_, index: number) => (
+                  <Cell
+                    key={`cell-${index}`}
+                    fill={DEFAULT_SERIES_COLORS[index % DEFAULT_SERIES_COLORS.length]}
+                    stroke="rgba(15, 23, 42, 0.8)"
+                    strokeWidth={2}
+                  />
+                ))}
+              </Pie>
+            </PieChart>
+          ) : (
+            <BarChart data={data} margin={{ top: 20, right: 35, left: 10, bottom: shouldRotate ? 45 : 20 }}>
+              <defs>
+                {finalSeries.map((s: any, idx: number) => {
+                  const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
+                  return (
+                    <linearGradient key={`barGrad-${idx}`} id={`barGrad-${idx}`} x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor={color} stopOpacity={0.95} />
                       <stop offset="100%" stopColor={color} stopOpacity={0.5} />
                     </linearGradient>
                   );
                 })}
               </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.07)" vertical={false} />
-              <XAxis dataKey={xKey} stroke="#64748b" tick={{ fill: '#94a3b8', fontSize: 11 }} padding={{ left: 15, right: 30 }} axisLine={false} tickLine={false} />
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.06)" vertical={false} />
+              <XAxis
+                dataKey={xKey}
+                stroke="#64748b"
+                tick={<CustomXAxisTick shouldRotate={shouldRotate} />}
+                height={shouldRotate ? 65 : 30}
+                interval={0}
+                axisLine={{ stroke: 'rgba(255, 255, 255, 0.1)' }}
+                tickLine={false}
+              />
               <YAxis stroke="#64748b" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
               <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(255, 255, 255, 0.04)', radius: 6 }} />
-              <Legend wrapperStyle={{ color: '#cbd5e1', paddingTop: '12px', fontSize: '13px' }} />
-              {series.map((s: any, idx: number) => {
+              <Legend wrapperStyle={{ color: '#cbd5e1', paddingTop: '12px', fontSize: '12px' }} />
+              {finalSeries.map((s: any, idx: number) => {
                 const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
                 return (
                   <Bar
@@ -200,7 +677,10 @@ const ChartComponent: React.FC<{ jsonStr: string }> = ({ jsonStr }) => {
                     strokeWidth={1}
                     name={s.name || s.dataKey}
                     radius={[6, 6, 0, 0]}
-                  />
+                    maxBarSize={44}
+                  >
+                    <LabelList dataKey={s.dataKey} position="top" fill="#cbd5e1" fontSize={10} fontWeight={500} />
+                  </Bar>
                 );
               })}
             </BarChart>
@@ -210,7 +690,7 @@ const ChartComponent: React.FC<{ jsonStr: string }> = ({ jsonStr }) => {
     };
 
     return (
-      <div className="recharts-glass-card">
+      <div className={`recharts-glass-card ${isFullscreen ? 'chart-card-fullscreen' : ''}`}>
         <div className="recharts-card-header">
           <div className="header-left">
             <div className="chart-sparkle-icon">
@@ -219,8 +699,8 @@ const ChartComponent: React.FC<{ jsonStr: string }> = ({ jsonStr }) => {
             <div className="chart-header-info">
               <h4 className="chart-title">{title}</h4>
               <div className="chart-tags">
-                <span className="chart-type-pill">{chartTypeState.toUpperCase()}</span>
-                <span className="chart-count-pill">{data.length} registros</span>
+                <span className="chart-type-pill">{chartTypeState.replace('-', ' ').toUpperCase()}</span>
+                <span className="chart-count-pill">{data.length} itens</span>
               </div>
             </div>
           </div>
@@ -228,34 +708,98 @@ const ChartComponent: React.FC<{ jsonStr: string }> = ({ jsonStr }) => {
           <div className="header-right">
             <div className="chart-type-toggle">
               <button
+                className={`btn-toggle-type ${chartTypeState === 'bar-horizontal' ? 'active' : ''}`}
+                onClick={() => setChartTypeState('bar-horizontal')}
+                title="Barras Horizontais (Ideal para rankings e nomes longos)"
+              >
+                <LayoutList size={13} />
+              </button>
+              <button
                 className={`btn-toggle-type ${chartTypeState === 'bar' ? 'active' : ''}`}
                 onClick={() => setChartTypeState('bar')}
-                title="Visão em Barras"
+                title="Barras Verticais"
               >
                 <BarChart2 size={13} />
               </button>
               <button
                 className={`btn-toggle-type ${chartTypeState === 'line' ? 'active' : ''}`}
                 onClick={() => setChartTypeState('line')}
-                title="Visão em Linhas"
+                title="Linhas"
               >
                 <TrendingUp size={13} />
               </button>
               <button
                 className={`btn-toggle-type ${chartTypeState === 'area' ? 'active' : ''}`}
                 onClick={() => setChartTypeState('area')}
-                title="Visão em Área"
+                title="Área"
               >
                 <Activity size={13} />
               </button>
+              <button
+                className={`btn-toggle-type ${chartTypeState === 'pie' ? 'active' : ''}`}
+                onClick={() => setChartTypeState('pie')}
+                title="Donut / Pizza"
+              >
+                <PieIcon size={13} />
+              </button>
+              <button
+                className={`btn-toggle-type ${chartTypeState === 'table' ? 'active' : ''}`}
+                onClick={() => setChartTypeState('table')}
+                title="Visualizar em Tabela"
+              >
+                <TableIcon size={13} />
+              </button>
             </div>
+
+            <button onClick={handleExportCSV} className="btn-copy-chart-json" title="Exportar dados como CSV">
+              <Download size={13} />
+              <span>CSV</span>
+            </button>
 
             <button onClick={handleCopyJSON} className="btn-copy-chart-json" title="Copiar JSON do Gráfico">
               {copied ? <Check size={13} style={{ color: '#10b981' }} /> : <Copy size={13} />}
               <span>{copied ? 'Copiado' : 'JSON'}</span>
             </button>
+
+            <button
+              onClick={() => setIsFullscreen(!isFullscreen)}
+              className="btn-copy-chart-json"
+              title={isFullscreen ? 'Restaurar tamanho' : 'Maximizar gráfico'}
+            >
+              {isFullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+            </button>
           </div>
         </div>
+
+        {/* KPI Mini-Ribbon */}
+        {numCount > 0 && chartTypeState !== 'table' && (
+          <div className="chart-kpi-ribbon">
+            {leaderItem && (
+              <div className="kpi-card leader">
+                <span className="kpi-label">🏆 Maior</span>
+                <span className="kpi-val" title={String(leaderItem[xKey])}>
+                  {String(leaderItem[xKey]).length > 15 ? String(leaderItem[xKey]).slice(0, 14) + '…' : leaderItem[xKey]}: <strong>{Number(leaderItem[primaryKey]).toLocaleString('pt-BR')}</strong>
+                </span>
+              </div>
+            )}
+            {minItem && (
+              <div className="kpi-card min">
+                <span className="kpi-label">📉 Menor</span>
+                <span className="kpi-val" title={String(minItem[xKey])}>
+                  {String(minItem[xKey]).length > 15 ? String(minItem[xKey]).slice(0, 14) + '…' : minItem[xKey]}: <strong>{Number(minItem[primaryKey]).toLocaleString('pt-BR')}</strong>
+                </span>
+              </div>
+            )}
+            <div className="kpi-card avg">
+              <span className="kpi-label">📊 Média</span>
+              <span className="kpi-val"><strong>{avgVal.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}</strong></span>
+            </div>
+            <div className="kpi-card count">
+              <span className="kpi-label">🔢 Total</span>
+              <span className="kpi-val"><strong>{data.length}</strong> itens</span>
+            </div>
+          </div>
+        )}
 
         <div className="recharts-card-body">
           {renderChart()}
@@ -266,7 +810,6 @@ const ChartComponent: React.FC<{ jsonStr: string }> = ({ jsonStr }) => {
     return <div className="chart-error-card">Erro ao renderizar gráfico: JSON de configuração inválido.</div>;
   }
 };
-
 const ImageGalleryWidget: React.FC<{ jsonStr: string }> = ({ jsonStr }) => {
   const [selectedImage, setSelectedImage] = useState<any | null>(null);
 
@@ -642,12 +1185,12 @@ function parseBashBlock(codeString: string): { command: string; output: string }
 
   if (lines.length > 0 && (lines[0].startsWith('$ ') || lines[0].startsWith('# $ '))) {
     const rawCmd = lines[0].startsWith('$ ') ? lines[0].substring(2) : lines[0].substring(4);
-    const output = lines.slice(1).join('\n').trim();
+    const output = lines.slice(1).join("\n").trim();
     return { command: rawCmd.trim(), output };
   }
 
   if (lines.length > 1 && (lines[0].startsWith('ls') || lines[0].startsWith('cat') || lines[0].startsWith('git') || lines[0].startsWith('node') || lines[0].startsWith('npm') || lines[0].startsWith('python') || lines[0].startsWith('echo') || lines[0].startsWith('pwd'))) {
-    return { command: lines[0].trim(), output: lines.slice(1).join('\n').trim() };
+    return { command: lines[0].trim(), output: lines.slice(1).join("\n").trim() };
   }
 
   return { command: '', output: clean };
@@ -889,7 +1432,30 @@ const ChatFeed: React.FC<ChatFeedProps> = ({ messages, onApproveTerminal }) => {
                 </div>
                 <div className="markdown-body">
                   <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
                     components={{
+                      table({ children }) {
+                        return (
+                          <div className="custom-table-container">
+                            <table className="custom-markdown-table">{children}</table>
+                          </div>
+                        );
+                      },
+                      thead({ children }) {
+                        return <thead className="custom-thead">{children}</thead>;
+                      },
+                      tbody({ children }) {
+                        return <tbody className="custom-tbody">{children}</tbody>;
+                      },
+                      tr({ children }) {
+                        return <tr className="custom-tr">{children}</tr>;
+                      },
+                      th({ children }) {
+                        return <th className="custom-th">{children}</th>;
+                      },
+                      td({ children }) {
+                        return <td className="custom-td">{children}</td>;
+                      },
                       code({ node, inline, className, children, ...props }: any) {
                         const match = /language-(\w+)/.exec(className || '');
                         const language = match ? match[1] : '';
@@ -899,6 +1465,9 @@ const ChatFeed: React.FC<ChatFeedProps> = ({ messages, onApproveTerminal }) => {
                         if (isBlock) {
                           if (language === 'recharts') {
                             return <ChartComponent jsonStr={String(children)} />;
+                          }
+                          if (language === 'table' || language === 'tabela' || language === 'json-table') {
+                            return <InteractiveTable jsonStr={String(children)} />;
                           }
                           if (language === 'images') {
                             return <ImageGalleryWidget jsonStr={String(children)} />;

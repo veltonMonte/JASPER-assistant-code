@@ -283,7 +283,8 @@ async function startLiveStreaming() {
       },
     });
 
-    const micAudioContext = new (window.AudioContext || window.webkitAudioContext)({ sampleRate: 16000 });
+    const micAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+    const inRate = micAudioContext.sampleRate || 48000;
     micSource = micAudioContext.createMediaStreamSource(micStream);
 
     // ScriptProcessorNode para capturar PCM raw

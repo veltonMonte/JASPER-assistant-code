@@ -78,6 +78,13 @@ export class JasperWebSocketServer {
         error: payload.result?.error,
       });
 
+      if (payload.tool === 'renderizar_tabela' && payload.success && payload.result?.tableConfig) {
+        this.broadcastToClients({
+          type: 'LIVE_TEXT_CHUNK',
+          text: `\n\`\`\`table\n${payload.result.tableConfig}\n\`\`\`\n`
+        });
+      }
+
       if (payload.tool === 'pesquisar_imagens' && payload.success && payload.result?.images?.length > 0) {
         this.broadcastToClients({
           type: 'LIVE_TEXT_CHUNK',
@@ -327,6 +334,12 @@ export class JasperWebSocketServer {
           });
         }
 
+        if (data.name === 'renderizar_tabela' && !data.error && data.result?.tableConfig) {
+          this.broadcastToClients({
+            type: 'LIVE_TEXT_CHUNK',
+            text: `\n\`\`\`table\n${data.result.tableConfig}\n\`\`\`\n`
+          });
+        }
         if (data.name === 'renderizar_video' && !data.error && data.result?.url) {
           this.broadcastToClients({
             type: 'LIVE_TEXT_CHUNK',
@@ -396,7 +409,16 @@ export class JasperWebSocketServer {
         }
 
         // Analisa a energia do áudio para controle de estado local e barge-in
-        vadManager.processAudioEnergy(base64Pcm);
+        const isSpeech = vadManager.processAudioEnergy(base64Pcm);
+        const buf = Buffer.from(base64Pcm, 'base64');
+        let chunkMax = 0;
+        for (let i = 0; i < buf.length - 1; i += 2) {
+          const s = Math.abs(buf.readInt16LE(i));
+          if (s > chunkMax) chunkMax = s;
+        }
+        if (Math.random() < 0.1 || chunkMax > 500) {
+          console.log("[Audio Level] chunkMax=" + chunkMax + " | isSpeech=" + isSpeech + " | bytes=" + buf.length);
+        }
 
         if (this.geminiLive && this.geminiLive.isLiveConnected()) {
           this.geminiLive.sendAudioChunk(base64Pcm, 16000);

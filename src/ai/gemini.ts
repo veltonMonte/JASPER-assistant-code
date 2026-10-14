@@ -22,13 +22,21 @@ export class GeminiBrain {
   /**
    * Remove mensagens de tool/function do histórico para evitar conflito de validação de schemas do SDK
    */
-  private sanitizeHistory(history: Array<{ role: string; content: string }>): Array<{ role: string; parts: Array<{ text: string }> }> {
+  private sanitizeHistory(history: any[]): Array<{ role: string; parts: Array<{ text: string }> }> {
     return history
       .filter((msg) => msg.role === 'user' || msg.role === 'model')
-      .map((msg) => ({
-        role: msg.role === 'model' ? 'model' : 'user',
-        parts: [{ text: msg.content }],
-      }));
+      .map((msg) => {
+        let text = '';
+        if (typeof msg.content === 'string') {
+          text = msg.content;
+        } else if (Array.isArray(msg.parts) && msg.parts[0]?.text) {
+          text = msg.parts[0].text;
+        }
+        return {
+          role: msg.role === 'model' ? 'model' : 'user',
+          parts: [{ text }],
+        };
+      });
   }
 
   /**
@@ -47,11 +55,12 @@ export class GeminiBrain {
    */
   public async generateResponse(
     userPrompt: string,
-    historyContext: Array<{ role: string; content: string }> = []
+    historyContext: any[] = []
   ): Promise<GeminiResponse> {
     const startTime = Date.now();
     const toolsExecuted: string[] = [];
     const chartConfigs: string[] = [];
+    const tableConfigs: string[] = [];
     const imageConfigs: string[] = [];
 
     // Se não houver chave de API configurada, utiliza o modo simulação inteligente
@@ -119,6 +128,8 @@ export class GeminiBrain {
 
           if (fc.name === 'renderizar_grafico' && toolResult?.chartConfig) {
             chartConfigs.push(toolResult.chartConfig);
+          } else if (fc.name === 'renderizar_tabela' && toolResult?.tableConfig) {
+            tableConfigs.push(toolResult.tableConfig);
           } else if (fc.name === 'pesquisar_imagens' && toolResult?.images) {
             imageConfigs.push(JSON.stringify(toolResult.images));
           }
@@ -140,6 +151,13 @@ export class GeminiBrain {
       if (chartConfigs.length > 0 && !finalResponseText.includes('```recharts')) {
         for (const cfg of chartConfigs) {
           finalResponseText += `\n\n\`\`\`recharts\n${cfg}\n\`\`\`\n`;
+        }
+      }
+
+      // Injeta blocos de tabelas se ainda não foram incluídos explicitamente no markdown
+      if (tableConfigs.length > 0 && !finalResponseText.includes('```table')) {
+        for (const tCfg of tableConfigs) {
+          finalResponseText += `\n\n\`\`\`table\n${tCfg}\n\`\`\`\n`;
         }
       }
 
@@ -193,6 +211,86 @@ export class GeminiBrain {
       toolsExecuted.push('pesquisar_web');
       text = `Pesquisei na internet sobre **"${query}"**:\n\n` +
         (searchRes.results ? searchRes.results.slice(0, 4).map((r: any) => `• **${r.title}**: ${r.snippet}`).join('\n') : searchRes.message);
+    } else if ((lower.includes('filme') || lower.includes('filmes') || lower.includes('cinema')) && (lower.includes('top') || lower.includes('critica') || lower.includes('crítica') || lower.includes('melhor') || lower.includes('melhores') || lower.includes('tabela'))) {
+      const tableConfig = JSON.stringify({
+        title: 'Top 10 Melhores Filmes Segundo a Crítica Especializada (Metacritic & IMDb)',
+        columns: [
+          { key: 'pos', label: '#', align: 'center' },
+          { key: 'titulo', label: 'Filme' },
+          { key: 'ano', label: 'Ano', align: 'center' },
+          { key: 'diretor', label: 'Direção' },
+          { key: 'nota', label: 'Avaliação Crítica', align: 'right' },
+        ],
+        rows: [
+          { pos: 1, titulo: 'Cidadão Kane', ano: 1941, diretor: 'Orson Welles', nota: '100 / 100' },
+          { pos: 2, titulo: 'O Poderoso Chefão', ano: 1972, diretor: 'Francis Ford Coppola', nota: '100 / 100' },
+          { pos: 3, titulo: 'Casablanca', ano: 1942, diretor: 'Michael Curtiz', nota: '100 / 100' },
+          { pos: 4, titulo: 'Janela Indiscreta', ano: 1954, diretor: 'Alfred Hitchcock', nota: '100 / 100' },
+          { pos: 5, titulo: 'O Poderoso Chefão: Parte II', ano: 1974, diretor: 'Francis Ford Coppola', nota: '90 / 100' },
+          { pos: 6, titulo: 'Cantando na Chuva', ano: 1952, diretor: 'Stanley Donen, Gene Kelly', nota: '99 / 100' },
+          { pos: 7, titulo: 'Os Sete Samurais', ano: 1954, diretor: 'Akira Kurosawa', nota: '98 / 100' },
+          { pos: 8, titulo: 'Pulp Fiction: Tempo de Violência', ano: 1994, diretor: 'Quentin Tarantino', nota: '95 / 100' },
+          { pos: 9, titulo: 'A Viagem de Chihiro', ano: 2001, diretor: 'Hayao Miyazaki', nota: '96 / 100' },
+          { pos: 10, titulo: 'Um Sonho de Liberdade', ano: 1994, diretor: 'Frank Darabont', nota: '9.3 / 10' },
+        ]
+      });
+      toolsExecuted.push('renderizar_tabela');
+      text = `Aqui está a seleção com o **Top 10 Melhores Filmes da história segundo a crítica especializada**:\n\n\`\`\`table\n${tableConfig}\n\`\`\`\n\nEsses clássicos lideram as listas históricas do Metacritic e Sight & Sound, reconhecidos pela sua profunda influência na história do cinema.`;
+    } else if ((lower.includes('serie a') || lower.includes('série a') || lower.includes('brasileirao') || lower.includes('brasileirão') || lower.includes('campeonato brasileiro')) && (lower.includes('tabela') || lower.includes('classificacao') || lower.includes('classificação') || lower.includes('mande') || lower.includes('ver'))) {
+      const tableConfig = JSON.stringify({
+        title: 'Classificação Brasileirão 2024 - Série A',
+        columns: [
+          { key: 'pos', label: 'Pos', align: 'center' },
+          { key: 'time', label: 'Clube' },
+          { key: 'pts', label: 'PTS', align: 'center' },
+          { key: 'jogos', label: 'J', align: 'center' },
+          { key: 'vitorias', label: 'V', align: 'center' },
+          { key: 'empates', label: 'E', align: 'center' },
+          { key: 'derrotas', label: 'D', align: 'center' },
+          { key: 'saldo', label: 'SG', align: 'center' },
+        ],
+        rows: [
+          { pos: 1, time: 'Botafogo', pts: 60, jogos: 29, vitorias: 18, empates: 6, derrotas: 5, saldo: 24 },
+          { pos: 2, time: 'Palmeiras', pts: 57, jogos: 29, vitorias: 17, empates: 6, derrotas: 6, saldo: 26 },
+          { pos: 3, time: 'Fortaleza', pts: 55, jogos: 29, vitorias: 16, empates: 7, derrotas: 6, saldo: 12 },
+          { pos: 4, time: 'Flamengo', pts: 51, jogos: 29, vitorias: 15, empates: 6, derrotas: 8, saldo: 13 },
+          { pos: 5, time: 'São Paulo', pts: 47, jogos: 29, vitorias: 14, empates: 5, derrotas: 10, saldo: 6 },
+          { pos: 6, time: 'Internacional', pts: 46, jogos: 28, vitorias: 12, empates: 10, derrotas: 6, saldo: 11 },
+          { pos: 7, time: 'Bahia', pts: 45, jogos: 29, vitorias: 13, empates: 6, derrotas: 10, saldo: 5 },
+          { pos: 8, time: 'Cruzeiro', pts: 43, jogos: 29, vitorias: 12, empates: 7, derrotas: 10, saldo: 5 },
+          { pos: 9, time: 'Vasco da Gama', pts: 37, jogos: 28, vitorias: 10, empates: 7, derrotas: 11, saldo: -7 },
+          { pos: 10, time: 'Atlético-MG', pts: 37, jogos: 27, vitorias: 9, empates: 10, derrotas: 8, saldo: -2 },
+          { pos: 11, time: 'Grêmio', pts: 35, jogos: 29, vitorias: 10, empates: 5, derrotas: 14, saldo: -4 },
+          { pos: 12, time: 'Criciúma', pts: 35, jogos: 29, vitorias: 9, empates: 8, derrotas: 12, saldo: -4 },
+          { pos: 13, time: 'Red Bull Bragantino', pts: 34, jogos: 29, vitorias: 8, empates: 10, derrotas: 11, saldo: -4 },
+          { pos: 14, time: 'Juventude', pts: 34, jogos: 29, vitorias: 8, empates: 10, derrotas: 11, saldo: -9 },
+          { pos: 15, time: 'Athletico-PR', pts: 31, jogos: 27, vitorias: 8, empates: 7, derrotas: 12, saldo: -4 },
+          { pos: 16, time: 'Fluminense', pts: 30, jogos: 29, vitorias: 8, empates: 6, derrotas: 15, saldo: -9 },
+          { pos: 17, time: 'Vitória', pts: 29, jogos: 29, vitorias: 8, empates: 5, derrotas: 16, saldo: -13 },
+          { pos: 18, time: 'Corinthians', pts: 29, jogos: 29, vitorias: 6, empates: 11, derrotas: 12, saldo: -11 },
+          { pos: 19, time: 'Cuiabá', pts: 26, jogos: 28, vitorias: 6, empates: 8, derrotas: 14, saldo: -14 },
+          { pos: 20, time: 'Atlético-GO', pts: 21, jogos: 29, vitorias: 5, empates: 6, derrotas: 18, saldo: -24 },
+        ]
+      });
+      toolsExecuted.push('renderizar_tabela');
+      text = `Aqui está a **tabela de classificação da Série A do Brasileirão**:\n\n\`\`\`table\n${tableConfig}\n\`\`\`\n\nO Botafogo e o Palmeiras travam uma batalha direta pela liderança, com o Fortaleza na perseguição imediata!`;
+    } else if (lower.includes('tabela') || lower.includes('ranking') || lower.includes('tabelas')) {
+      const tableConfig = JSON.stringify({
+        title: 'Tabela de Indicadores JASPER',
+        columns: [
+          { key: 'item', label: 'Métrica / Módulo' },
+          { key: 'status', label: 'Status Operacional' },
+          { key: 'valor', label: 'Desempenho', align: 'right' },
+        ],
+        rows: [
+          { item: 'Cérebro Neural', status: 'Online', valor: '100%' },
+          { item: 'Pipeline de Ações', status: 'Ativo', valor: '99.9%' },
+          { item: 'Latência Média', status: 'Otimizada', valor: '< 20ms' },
+          { item: 'Dispositivos IoT', status: 'Sincronizado', valor: '8 unidades' },
+        ]
+      });
+      toolsExecuted.push('renderizar_tabela');
+      text = `Aqui está a tabela solicitada:\n\n\`\`\`table\n${tableConfig}\n\`\`\``;
     } else if (lower.includes('gráfico') || lower.includes('grafico') || lower.includes('chart')) {
       const chartConfig = JSON.stringify({
         title: 'Métricas de Desempenho JASPER',

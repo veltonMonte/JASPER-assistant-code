@@ -87,7 +87,7 @@ function cleanTextMonologue(text: string): string {
   
   // Remove markdown blocks that are leaked tool calls or raw arguments
   cleaned = cleaned.replace(/```[a-z]*\n[\s\S]*?\n```/gi, (match) => {
-    if (match.includes('pesquisar_web') || match.includes('acessar_site') || match.includes('ligar_pc') || match.includes('renderizar_grafico')) {
+    if (match.includes('pesquisar_web') || match.includes('acessar_site') || match.includes('ligar_pc') || match.includes('renderizar_grafico') || match.includes('renderizar_tabela')) {
       return '';
     }
     if (match.match(/```[a-z]*\n\s*"[^"]+"\s*\n```/)) {
@@ -158,18 +158,46 @@ function base64ToFloat32Array(base64: string): Float32Array {
   return float32;
 }
 
-function float32ToInt16Base64(float32Array: Float32Array): string {
-  const int16Array = new Int16Array(float32Array.length);
-  for (let i = 0; i < float32Array.length; i++) {
-    const s = Math.max(-1, Math.min(1, float32Array[i]));
-    int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+function downsampleAndConvertToInt16Base64(
+  input: Float32Array,
+  inSampleRate: number,
+  outSampleRate = 16000,
+  gain = 2.5
+): string {
+  let int16Array: Int16Array;
+  
+  if (!inSampleRate || inSampleRate === outSampleRate) {
+    int16Array = new Int16Array(input.length);
+    for (let i = 0; i < input.length; i++) {
+      const s = Math.max(-1, Math.min(1, input[i] * gain));
+      int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    }
+  } else {
+    const ratio = inSampleRate / outSampleRate;
+    const newLength = Math.round(input.length / ratio);
+    int16Array = new Int16Array(newLength);
+    for (let i = 0; i < newLength; i++) {
+      const pos = i * ratio;
+      const index = Math.floor(pos);
+      const frac = pos - index;
+      const s1 = input[index] || 0;
+      const s2 = input[index + 1] !== undefined ? input[index + 1] : s1;
+      const s = Math.max(-1, Math.min(1, (s1 + frac * (s2 - s1)) * gain));
+      int16Array[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+    }
   }
+
   const bytes = new Uint8Array(int16Array.buffer);
   let binary = '';
-  for (let i = 0; i < bytes.byteLength; i++) {
+  const len = bytes.byteLength;
+  for (let i = 0; i < len; i++) {
     binary += String.fromCharCode(bytes[i]);
   }
   return window.btoa(binary);
+}
+
+function float32ToInt16Base64(float32Array: Float32Array): string {
+  return downsampleAndConvertToInt16Base64(float32Array, 16000, 16000);
 }
 
 export function useJasperWebSocket(): UseJasperReturn {
@@ -646,20 +674,24 @@ export function useJasperWebSocket(): UseJasperReturn {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: { 
-          echoCancellation: false, 
-          noiseSuppression: false, 
-          autoGainControl: false 
+          echoCancellation: true, 
+          noiseSuppression: true, 
+          autoGainControl: true 
         } 
       });
       mediaStreamRef.current = stream;
-      micAudioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 16000 });
-      const source = micAudioContextRef.current.createMediaStreamSource(stream);
-      const processor = micAudioContextRef.current.createScriptProcessor(4096, 1, 1);
+      const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
+      // Não passar { sampleRate: 16000 } no Firefox para evitar erro de AudioNodes com sample-rate diferente
+      const micCtx = new AudioCtx();
+      micAudioContextRef.current = micCtx;
+      const inputSampleRate = micCtx.sampleRate || 48000;
+      const source = micCtx.createMediaStreamSource(stream);
+      const processor = micCtx.createScriptProcessor(4096, 1, 1);
       
       processor.onaudioprocess = (e) => {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
         const inputData = e.inputBuffer.getChannelData(0);
-        const base64Audio = float32ToInt16Base64(inputData);
+        const base64Audio = downsampleAndConvertToInt16Base64(inputData, inputSampleRate, 16000);
         wsRef.current.send(JSON.stringify({
           type: 'PCM_AUDIO_CHUNK',
           base64Pcm: base64Audio
@@ -685,9 +717,9 @@ export function useJasperWebSocket(): UseJasperReturn {
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: { 
-          echoCancellation: false, 
-          noiseSuppression: false, 
-          autoGainControl: false 
+          echoCancellation: true, 
+          noiseSuppression: true, 
+          autoGainControl: true 
         } 
       });
       mediaStreamRef.current = stream;

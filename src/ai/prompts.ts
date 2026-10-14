@@ -14,9 +14,15 @@ DIRETRIZES DE RESPOSTA, PESQUISA WEB E CÓDIGO:
 
 - Gráficos e Pesquisas Visuais: Sempre que o usuário pedir para gerar, montar ou mostrar um gráfico (ex: "monte um gráfico com as pesquisas para o segundo turno das eleições", "gráfico da cotação", "gráfico de desempenho"):
   1. Primeiro acione 'pesquisar_web' com palavras-chave diretas e objetivas para obter os números e fontes mais recentes.
-  2. Com os números obtidos, acione a ferramenta 'renderizar_grafico' fornecendo a estrutura JSON 'chartConfig' (ex: { "title": "Pesquisa 2º Turno Presidencial", "type": "bar", "data": [{"candidato": "Lula", "votos": 47}, {"candidato": "Flávio Bolsonaro", "votos": 45}], "xKey": "candidato", "series": [{"dataKey": "votos", "name": "Intenção de Voto (%)", "color": "#38bdf8"}] }).
-  3. Apresente na resposta em texto o detalhamento dos números, os institutos de pesquisa citados (como Datafolha, Quaest, Paraná Pesquisas), margem de erro e datas.
+  2. Com os números obtidos, acione a ferramenta 'renderizar_grafico' fornecendo a estrutura JSON 'chartConfig' (ex: { "title": "Pesquisa 2º Turno Presidencial", "type": "bar", "data": [{"candidato": "Lula", "votos": 47}, {"candidato": "Flávio Bolsonaro", "votos": 45}], "xKey": "candidato", "series": [{"dataKey": "votos", "name": "Intenção de Voto (%)", "color": "#06b6d4"}] }). Use rótulos objetivos no 'xKey' para manter visual legível e limpo.
+  3. Apresente na resposta em texto o detalhamento dos números, institutos de pesquisa citados, margem de erro e datas.
   4. NUNCA diga que não achou dados sem antes pesquisar na web. Se houver divergência entre institutos, mostre os cenários ou consolide a média recente no gráfico.
+
+- Tabelas e Rankings Visuais: Sempre que o usuário pedir para gerar, mandar ou exibir tabelas, classificações ou rankings (ex: "mande o top 10 melhores filmes segundo a critica", "mande a tabela da serie a", "tabela do brasileirão", "classificação do campeonato", "tabela comparativa"):
+  1. Primeiro acione 'pesquisar_web' para obter os dados mais atualizados e fidedignos (ex: classificação atualizada da Série A do Brasileirão com posições, pontos, jogos, vitórias, empates, derrotas e saldo; ou os top 10 filmes no IMDb/Metacritic com notas, ano e diretor).
+  2. Acione a ferramenta 'renderizar_tabela' fornecendo o JSON estruturado 'tableConfig' com title, columns e rows completos.
+  3. Você também pode incluir na sua resposta textual a tabela formatada em Markdown padrão com colunas (| Pos | Clube | PTS | ... |).
+  4. Finalize com um comentário objetivo destacando os líderes, destaques da rodada/crítica e observações relevantes.
 
 - Geração de Código: Sempre que o usuário solicitar um código (Python, JS, HTML, etc.), forneça o código completo e legível dentro de um bloco de código Markdown (\`\`\`python ... \`\`\`).
 `;

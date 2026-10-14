@@ -102,15 +102,7 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, onOpenDiagnostic, on
               <Smartphone size={16} /> Instalar Aplicativo (PWA)
             </button>
           )}
-          {/* Link permanente para baixar o APK Nativo do Android */}
-          <a 
-            href="/jasper-mobile-v7.1.apk" 
-            download
-            className="flex items-center gap-2 p-2 mx-2 mb-2 rounded-lg bg-emerald-500/10 text-emerald-400 hover:bg-emerald-500/20 hover:text-emerald-300 transition-colors border border-emerald-500/20"
-          >
-            <Smartphone size={16} />
-            <span className="text-sm font-medium">Baixar App Nativo v7.1</span>
-          </a>
+
         </div>
       </aside>
     </>

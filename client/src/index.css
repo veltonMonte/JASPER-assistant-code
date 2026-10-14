@@ -2814,3 +2814,185 @@ body {
   transform: scale(1.03);
   box-shadow: 0 6px 20px rgba(163, 113, 247, 0.35);
 }
+
+
+/* ==========================================================================
+   Microphone Status Indicator & TARS Personality Panel Styles
+   ========================================================================== */
+
+.mic-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border-radius: 9999px;
+  font-size: 0.72rem;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+  transition: all 0.25s ease;
+  user-select: none;
+}
+
+.mic-pill.notebook {
+  background: rgba(148, 163, 184, 0.08);
+  border: 1px solid rgba(148, 163, 184, 0.2);
+  color: #94a3b8;
+}
+
+.mic-pill.womic {
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.35);
+  color: #34d399;
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.15);
+}
+
+.mic-pill.womic svg {
+  color: #10b981;
+  animation: pulse-mic 2s infinite ease-in-out;
+}
+
+@keyframes pulse-mic {
+  0%, 100% { opacity: 0.8; transform: scale(1); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+
+/* Personality Section in Sidebar */
+.personality-section {
+  margin-top: 16px;
+  padding-bottom: 8px;
+  border-bottom: 1px solid var(--border-subtle, rgba(255, 255, 255, 0.07));
+}
+
+.personality-header-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  cursor: pointer;
+  padding: 4px 0;
+  user-select: none;
+}
+
+.personality-header-toggle:hover .flex-title {
+  color: var(--color-cyan, #06b6d4);
+}
+
+.personality-header-toggle .flex-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+  color: var(--text-muted, #94a3b8);
+  transition: color 0.2s ease;
+}
+
+.toggle-indicator {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--text-muted, #64748b);
+}
+
+.personality-sliders-container {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 10px;
+  padding: 10px 12px;
+  background: rgba(15, 23, 42, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.05);
+  border-radius: 12px;
+}
+
+.personality-slider-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.slider-label-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 0.8rem;
+}
+
+.slider-name {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-body, #cbd5e1);
+  font-weight: 500;
+}
+
+.slider-name svg {
+  color: var(--color-cyan, #06b6d4);
+  opacity: 0.85;
+}
+
+.slider-value {
+  font-family: monospace;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: var(--color-cyan, #38bdf8);
+  background: rgba(6, 182, 212, 0.1);
+  padding: 1px 6px;
+  border-radius: 6px;
+}
+
+.tars-slider {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 100%;
+  height: 5px;
+  border-radius: 9999px;
+  background: rgba(255, 255, 255, 0.1);
+  outline: none;
+  transition: background 0.2s;
+  cursor: pointer;
+}
+
+.tars-slider::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: #38bdf8;
+  border: 2px solid #0f172a;
+  box-shadow: 0 0 8px rgba(56, 189, 248, 0.5);
+  cursor: pointer;
+  transition: transform 0.15s, background-color 0.15s;
+}
+
+.tars-slider::-webkit-slider-thumb:hover {
+  transform: scale(1.25);
+  background: #06b6d4;
+  box-shadow: 0 0 12px rgba(6, 182, 212, 0.8);
+}
+
+.tars-reset-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 8px 12px;
+  border-radius: 8px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  color: var(--text-muted, #94a3b8);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.tars-reset-btn:hover {
+  background: rgba(6, 182, 212, 0.1);
+  border-color: rgba(6, 182, 212, 0.3);
+  color: #38bdf8;
+  transform: translateY(-1px);
+}
+

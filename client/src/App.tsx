@@ -25,7 +25,23 @@ const cleanText = (text: string) => {
 }
 
 export default function App() {
-  const { state, isConnected, messages, transcript, sendText, toggleMic, getAudioLevel, sendTerminalApproval, activeAlarm, stopAlarm } = useJasperWebSocket()
+  const { 
+    state, 
+    isConnected, 
+    messages, 
+    transcript, 
+    activeMic,
+    personality,
+    updatePersonality,
+    resetPersonality,
+    sendText, 
+    toggleMic, 
+    getAudioLevel, 
+    sendTerminalApproval, 
+    activeAlarm, 
+    stopAlarm 
+  } = useJasperWebSocket()
+
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [diagnosticOpen, setDiagnosticOpen] = useState(false)
 
@@ -42,7 +58,6 @@ export default function App() {
   }, [sendText])
 
   const orbState = state === 'ERROR' ? 'IDLE' : state
-
   const hasMessages = messages.length > 0
 
   return (
@@ -64,7 +79,12 @@ export default function App() {
         </div>
       )}
 
-      <Header isConnected={isConnected} state={state} onToggleSidebar={handleToggleSidebar} />
+      <Header 
+        isConnected={isConnected} 
+        state={state} 
+        activeMic={activeMic}
+        onToggleSidebar={handleToggleSidebar} 
+      />
 
       <main className="main-content">
         <div className="orb-background-container">
@@ -100,6 +120,9 @@ export default function App() {
         onClose={handleCloseSidebar}
         onOpenDiagnostic={() => setDiagnosticOpen(true)}
         onSendCommand={handleSendCommand}
+        personality={personality}
+        onUpdatePersonality={updatePersonality}
+        onResetPersonality={resetPersonality}
       />
       
       <DiagnosticModal

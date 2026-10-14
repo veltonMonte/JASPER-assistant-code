@@ -18,11 +18,24 @@ export interface ChatMessage {
 
 export type JasperState = 'IDLE' | 'LISTENING' | 'PROCESSING' | 'SPEAKING' | 'ERROR';
 
+export interface PersonalityConfig {
+  humor: number;
+  honestidade: number;
+  sarcasmo: number;
+  formalidade: number;
+  verbosidade: number;
+  empatia: number;
+}
+
 export interface UseJasperReturn {
   state: JasperState;
   isConnected: boolean;
   messages: ChatMessage[];
   transcript: string;
+  activeMic: 'womic' | 'notebook';
+  personality: PersonalityConfig;
+  updatePersonality: (trait: keyof PersonalityConfig, value: number) => void;
+  resetPersonality: () => void;
   sendText: (text: string) => void;
   sendTerminalApproval: (id: string, approved: boolean, customCommand?: string, remember?: boolean) => void;
   toggleMic: () => void;
@@ -206,6 +219,32 @@ export function useJasperWebSocket(): UseJasperReturn {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [transcript, setTranscript] = useState('');
   const [activeAlarm, setActiveAlarm] = useState<{ id: string, message: string } | null>(null);
+  const [activeMic, setActiveMic] = useState<'womic' | 'notebook'>('notebook');
+  const [personality, setPersonality] = useState<PersonalityConfig>({
+    humor: 60,
+    honestidade: 90,
+    sarcasmo: 40,
+    formalidade: 30,
+    verbosidade: 50,
+    empatia: 70,
+  });
+
+  const updatePersonality = useCallback((trait: keyof PersonalityConfig, value: number) => {
+    const val = Math.max(0, Math.min(100, Math.round(value)));
+    setPersonality(prev => ({ ...prev, [trait]: val }));
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({
+        type: 'SET_PERSONALITY',
+        personality: { [trait]: val }
+      }));
+    }
+  }, []);
+
+  const resetPersonality = useCallback(() => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'RESET_PERSONALITY' }));
+    }
+  }, []);
   
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -422,6 +461,16 @@ export function useJasperWebSocket(): UseJasperReturn {
         switch (data.type) {
           case 'STATE_CHANGE':
             setState(data.state as JasperState);
+            break;
+          case 'MIC_STATUS':
+            if (data.activeMic === 'womic' || data.activeMic === 'notebook') {
+              setActiveMic(data.activeMic);
+            }
+            break;
+          case 'PERSONALITY_UPDATE':
+            if (data.personality) {
+              setPersonality(prev => ({ ...prev, ...data.personality }));
+            }
             break;
           case 'LIVE_STATUS':
             geminiLiveConnectedRef.current = !!data.connected;
@@ -791,6 +840,10 @@ export function useJasperWebSocket(): UseJasperReturn {
     isConnected,
     messages,
     transcript,
+    activeMic,
+    personality,
+    updatePersonality,
+    resetPersonality,
     sendText,
     sendTerminalApproval,
     toggleMic,

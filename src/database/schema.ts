@@ -8,6 +8,13 @@ CREATE TABLE IF NOT EXISTS memory (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+-- Tabela para gerenciar os 6 parâmetros de personalidade estilo TARS (Interestelar)
+CREATE TABLE IF NOT EXISTS personality_config (
+  trait TEXT PRIMARY KEY,
+  value INTEGER NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 
 -- Tabela para histórico de conversas (para sessões passadas)
 CREATE TABLE IF NOT EXISTS chat_history (

@@ -6,6 +6,7 @@ import { consultarHorario, criarLembrete, salvarMemoria, buscarMemoria, agendarA
 import { toggleDevice, getDeviceStatus } from './smarthome.js';
 import { executarTerminal } from './terminal.js';
 import { baixarMidia } from './media.js';
+import { ajustarPersonalidade, consultarPersonalidade, restaurarPersonalidadePadrao } from './personality.js';
 
 /**
  * Declaração das ferramentas disponíveis para o modelo Google Gemini (Function Calling)

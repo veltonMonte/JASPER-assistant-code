@@ -1,29 +1,57 @@
 import React, { useState, useEffect } from 'react';
-import { X, MessageSquare, BrainCircuit, Cpu, Wrench, Monitor, Activity, Settings, Lightbulb, Power, Smartphone } from 'lucide-react';
+import { 
+  X, MessageSquare, BrainCircuit, Cpu, Wrench, Monitor, Activity, 
+  Settings, Lightbulb, Power, Smartphone, Sliders, RotateCcw,
+  Smile, ShieldCheck, Zap, Award, AlignLeft, Heart
+} from 'lucide-react';
+import { PersonalityConfig } from '../hooks/useJasperWebSocket';
 
 export interface SidebarProps {
   isOpen: boolean;
   onClose: () => void;
   onOpenDiagnostic: () => void;
   onSendCommand: (cmd: string) => void;
+  personality?: PersonalityConfig;
+  onUpdatePersonality?: (trait: keyof PersonalityConfig, value: number) => void;
+  onResetPersonality?: () => void;
 }
 
-const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, onOpenDiagnostic, onSendCommand }) => {
+const TRAIT_CONFIG: Array<{
+  key: keyof PersonalityConfig;
+  label: string;
+  icon: React.ReactNode;
+  desc: string;
+}> = [
+  { key: 'humor', label: 'Humor', icon: <Smile size={16} />, desc: 'Piadas e comentários espirituosos' },
+  { key: 'honestidade', label: 'Honestidade', icon: <ShieldCheck size={16} />, desc: 'Verdades diretas sem rodeios (TARS 90%)' },
+  { key: 'sarcasmo', label: 'Sarcasmo', icon: <Zap size={16} />, desc: 'Ironia militar e cinismo sutil' },
+  { key: 'formalidade', label: 'Formalidade', icon: <Award size={16} />, desc: 'Protocolo formal vs parceiro de missão' },
+  { key: 'verbosidade', label: 'Verbosidade', icon: <AlignLeft size={16} />, desc: 'Respostas concisas ou aprofundadas' },
+  { key: 'empatia', label: 'Empatia', icon: <Heart size={16} />, desc: 'Acolhimento vs foco prático na tarefa' },
+];
+
+const Sidebar: React.FC<SidebarProps> = ({ 
+  isOpen, 
+  onClose, 
+  onOpenDiagnostic, 
+  onSendCommand,
+  personality,
+  onUpdatePersonality,
+  onResetPersonality
+}) => {
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isInstallable, setIsInstallable] = useState(false);
+  const [showPersonality, setShowPersonality] = useState(true);
 
   useEffect(() => {
     const handleBeforeInstallPrompt = (e: any) => {
-      // Impede o Chrome antigo de mostrar o prompt automaticamente
       e.preventDefault();
-      // Salva o evento para acionar quando o botão for clicado
       setDeferredPrompt(e);
       setIsInstallable(true);
     };
 
     window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
     
-    // Se o app já estiver instalado, ou se for PWA standalone, esconder o botão de instalar
     if (window.matchMedia('(display-mode: standalone)').matches) {
       setIsInstallable(false);
     }
@@ -38,7 +66,6 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, onOpenDiagnostic, on
     deferredPrompt.prompt();
     const { outcome } = await deferredPrompt.userChoice;
     if (outcome === 'accepted') {
-      console.log('Usuário instalou o PWA!');
       setIsInstallable(false);
     }
     setDeferredPrompt(null);
@@ -67,6 +94,58 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, onOpenDiagnostic, on
             <Wrench size={16} /> Ferramentas
           </button>
         </div>
+
+        {/* Painel de Personalidade TARS (Interestelar) */}
+        {personality && onUpdatePersonality && (
+          <div className="personality-section">
+            <div 
+              className="section-label personality-header-toggle" 
+              onClick={() => setShowPersonality(prev => !prev)}
+            >
+              <span className="flex-title"><Sliders size={14} /> Personalidade (TARS)</span>
+              <span className="toggle-indicator">{showPersonality ? '−' : '+'}</span>
+            </div>
+
+            {showPersonality && (
+              <div className="personality-sliders-container">
+                {TRAIT_CONFIG.map(({ key, label, icon, desc }) => {
+                  const val = personality[key] ?? 50;
+                  return (
+                    <div key={key} className="personality-slider-row" title={desc}>
+                      <div className="slider-label-row">
+                        <span className="slider-name">
+                          {icon}
+                          <span>{label}</span>
+                        </span>
+                        <span className="slider-value">{val}%</span>
+                      </div>
+                      <input 
+                        type="range" 
+                        min="0" 
+                        max="100" 
+                        value={val}
+                        aria-label={`Ajustar ${label}`}
+                        className="tars-slider"
+                        onChange={(e) => onUpdatePersonality(key, Number(e.target.value))}
+                      />
+                    </div>
+                  );
+                })}
+
+                {onResetPersonality && (
+                  <button 
+                    className="tars-reset-btn" 
+                    onClick={onResetPersonality}
+                    title="Restaura os valores nominais do TARS (Humor 60%, Honestidade 90%, Sarcasmo 40%, etc)"
+                  >
+                    <RotateCcw size={13} />
+                    <span>Restaurar Padrão TARS</span>
+                  </button>
+                )}
+              </div>
+            )}
+          </div>
+        )}
 
         <div className="device-section">
           <div className="section-label">Dispositivos</div>
@@ -102,7 +181,6 @@ const Sidebar: React.FC<SidebarProps> = ({ isOpen, onClose, onOpenDiagnostic, on
               <Smartphone size={16} /> Instalar Aplicativo (PWA)
             </button>
           )}
-
         </div>
       </aside>
     </>

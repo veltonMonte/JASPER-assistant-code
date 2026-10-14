@@ -1,3 +1,4 @@
+import { buildPersonalityPrompt } from "./personality.js";
 import { WebSocket } from 'ws';
 import { EventEmitter } from 'events';
 import { config } from '../config/config.js';
@@ -123,6 +124,12 @@ export class GeminiLiveSession extends EventEmitter {
         memories.map((m) => `- ${m.key}: ${m.value}`).join('\n') + '\n';
     }
 
+    let personalityPrompt = '';
+    try {
+      const personality = await dbManager.getPersonality();
+      personalityPrompt = "\n" + buildPersonalityPrompt(personality) + "\n";
+    } catch (e) {}
+
     const now = new Date();
     const fmtStr = new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: 'long', day: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' }).format(now);
     
@@ -132,7 +139,7 @@ export class GeminiLiveSession extends EventEmitter {
     
     const timeContext = `\n[CONTEXTO DE TEMPO DA CONEXÃO]\nO horário que esta sessão iniciou em Brasília (America/Sao_Paulo) foi: ${fmtStr}.\n(Formato ISO: ${isoStr}).\nATENÇÃO: Este horário pode estar desatualizado! Você DEVE SEMPRE chamar a ferramenta 'consultarHorario' ANTES de agendar qualquer alarme para saber a hora ATUAL exata e calcular o tempo corretamente!\n`;
 
-    const fullPrompt = JASPER_SYSTEM_PROMPT + memorySummary + timeContext +
+    const fullPrompt = JASPER_SYSTEM_PROMPT + personalityPrompt + memorySummary + timeContext +
       '\nVocê é JASPER e está conversando por voz em tempo real. Responda com voz natural e objetiva em português do Brasil.';
 
     const setupPayload = {
@@ -300,4 +307,14 @@ export class GeminiLiveSession extends EventEmitter {
       this.setupComplete = false;
     }
   }
+  public async reloadPersonality(): Promise<void> {
+    console.log("🔄 Atualizando personalidade TARS no Gemini Live...");
+    if (this.ws && this.isLiveConnected()) {
+      try {
+        this.ws.close();
+      } catch (e) {}
+      await this.connect();
+    }
+  }
+
 }

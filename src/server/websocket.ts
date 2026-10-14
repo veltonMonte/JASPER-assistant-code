@@ -1,3 +1,5 @@
+import { dbManager } from "../database/database.js";
+import { execSync } from "child_process";
 import { WebSocketServer, WebSocket } from 'ws';
 import { Server } from 'http';
 import { wakeWordManager } from '../voice/wakeword.js';
@@ -11,11 +13,41 @@ export class JasperWebSocketServer {
   private geminiLive: GeminiLiveSession | null = null;
   private pendingTerminalApprovalId: string | null = null;
   private activeClient: WebSocket | null = null;
+  private activeMic: "womic" | "notebook" = "notebook";
+
+  public getActiveMic(): "womic" | "notebook" {
+    return this.activeMic;
+  }
+
+  public setActiveMic(mic: "womic" | "notebook"): void {
+    this.activeMic = mic;
+    console.log(`🎤 Microfone ativo alterado para: ${mic === "womic" ? "WO Mic (Celular)" : "Microfone do Notebook"}`);
+    this.broadcastToClients({
+      type: "MIC_STATUS",
+      activeMic: mic,
+    });
+  }
 
   public init(server: Server): void {
     this.wss = new WebSocketServer({ server, path: '/ws' });
 
     console.log('📡 Servidor WebSocket inicializado no endpoint /ws');
+    try {
+      const defSource = execSync("pactl get-default-source 2>/dev/null || true", { encoding: "utf-8" });
+      if (defSource.includes("womic")) {
+        this.activeMic = "womic";
+      }
+    } catch (e) {}
+
+    toolEvents.on("personality_updated", async (updatedPersonality: any) => {
+      this.broadcastToClients({
+        type: "PERSONALITY_UPDATE",
+        personality: updatedPersonality,
+      });
+      if (this.geminiLive) {
+        await this.geminiLive.reloadPersonality();
+      }
+    });
 
     // Subscribe to tool events
     toolEvents.on('request_terminal_approval', (payload: { id: string; command: string; riskLevel?: string }) => {
@@ -126,6 +158,18 @@ export class JasperWebSocketServer {
         type: 'LIVE_STATUS',
         connected: this.geminiLive?.isLiveConnected() || false,
       });
+
+      this.sendToClient(ws, {
+        type: "MIC_STATUS",
+        activeMic: this.activeMic,
+      });
+
+      dbManager.getPersonality().then((p) => {
+        this.sendToClient(ws, {
+          type: "PERSONALITY_UPDATE",
+          personality: p,
+        });
+      }).catch(() => {});
 
       ws.on('message', async (data: Buffer | string, isBinary: boolean) => {
         if (isBinary || (Buffer.isBuffer(data) && data[0] !== 123)) {
@@ -396,6 +440,40 @@ export class JasperWebSocketServer {
     this.activeClient = ws;
 
     switch (type) {
+      case "GET_PERSONALITY": {
+        const personality = await dbManager.getPersonality();
+        this.sendToClient(ws, {
+          type: "PERSONALITY_UPDATE",
+          personality,
+        });
+        break;
+      }
+
+      case "SET_PERSONALITY": {
+        if (payload.personality) {
+          const updated = await dbManager.updatePersonality(payload.personality);
+          this.broadcastToClients({
+            type: "PERSONALITY_UPDATE",
+            personality: updated,
+          });
+          if (this.geminiLive) {
+            await this.geminiLive.reloadPersonality();
+          }
+        }
+        break;
+      }
+
+      case "RESET_PERSONALITY": {
+        const defaults = await dbManager.resetPersonality();
+        this.broadcastToClients({
+          type: "PERSONALITY_UPDATE",
+          personality: defaults,
+        });
+        if (this.geminiLive) {
+          await this.geminiLive.reloadPersonality();
+        }
+        break;
+      }
       case 'PCM_AUDIO_CHUNK': {
         if (!base64Pcm) return;
 

@@ -1,3 +1,22 @@
+
+export interface PersonalityConfig {
+  humor: number;
+  honestidade: number;
+  sarcasmo: number;
+  formalidade: number;
+  verbosidade: number;
+  empatia: number;
+}
+
+export const DEFAULT_PERSONALITY: PersonalityConfig = {
+  humor: 60,
+  honestidade: 90,
+  sarcasmo: 40,
+  formalidade: 30,
+  verbosidade: 50,
+  empatia: 70,
+};
+
 import sqlite3 from 'sqlite3';
 import { config } from '../config/config.js';
 import { CREATE_TABLES_SQL } from './schema.js';
@@ -173,6 +192,68 @@ class DatabaseManager {
       });
     });
   }
+
+  // --- Operações de Personalidade TARS ---
+
+  public getPersonality(): Promise<PersonalityConfig> {
+    return new Promise((resolve, reject) => {
+      if (!this.db) return resolve({ ...DEFAULT_PERSONALITY });
+      const query = `SELECT trait, value FROM personality_config`;
+      this.db.all(query, [], async (err, rows: Array<{ trait: string; value: number }>) => {
+        if (err) return reject(err);
+        const result: PersonalityConfig = { ...DEFAULT_PERSONALITY };
+        if (rows && rows.length > 0) {
+          for (const r of rows) {
+            if (r.trait in result) {
+              (result as any)[r.trait] = Math.max(0, Math.min(100, Number(r.value)));
+            }
+          }
+          resolve(result);
+        } else {
+          // Inicializa os padrões no SQLite
+          for (const [trait, val] of Object.entries(DEFAULT_PERSONALITY)) {
+            await this.setPersonalityTrait(trait, val);
+          }
+          resolve(result);
+        }
+      });
+    });
+  }
+
+  public setPersonalityTrait(trait: string, value: number): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!this.db) return resolve();
+      const val = Math.max(0, Math.min(100, Math.round(value)));
+      const query = `
+        INSERT INTO personality_config (trait, value, updated_at)
+        VALUES (?, ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(trait) DO UPDATE SET
+          value = excluded.value,
+          updated_at = CURRENT_TIMESTAMP
+      `;
+      this.db.run(query, [trait, val], (err) => {
+        if (err) return reject(err);
+        resolve();
+      });
+    });
+  }
+
+  public async updatePersonality(partial: Partial<PersonalityConfig>): Promise<PersonalityConfig> {
+    for (const [trait, val] of Object.entries(partial)) {
+      if (val !== undefined && typeof val === "number") {
+        await this.setPersonalityTrait(trait, val);
+      }
+    }
+    return this.getPersonality();
+  }
+
+  public async resetPersonality(): Promise<PersonalityConfig> {
+    for (const [trait, val] of Object.entries(DEFAULT_PERSONALITY)) {
+      await this.setPersonalityTrait(trait, val);
+    }
+    return { ...DEFAULT_PERSONALITY };
+  }
+
 }
 
 export const dbManager = new DatabaseManager();

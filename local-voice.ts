@@ -97,8 +97,18 @@ function connect() {
 
   ws.on('close', () => {
     console.log('⚠️ Conexão perdida. Tentando reconectar em 3s...');
-    if (arecord) { arecord.kill(); arecord = null; }
-    if (aplay) { aplay.kill(); aplay = null; }
+    if (arecord) {
+      try { arecord.kill('SIGKILL'); } catch(e) {}
+      arecord = null;
+    }
+    if (aplay) {
+      try { aplay.kill('SIGKILL'); } catch(e) {}
+      aplay = null;
+    }
+    if (ws) {
+      ws.removeAllListeners();
+      ws = null;
+    }
     if (!reconnectTimer) {
       reconnectTimer = setTimeout(() => {
         reconnectTimer = null;

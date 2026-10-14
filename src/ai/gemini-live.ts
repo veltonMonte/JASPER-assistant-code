@@ -25,6 +25,10 @@ export class GeminiLiveSession extends EventEmitter {
   }
 
   public async connect(): Promise<void> {
+    if (this.reconnectTimer) {
+      clearTimeout(this.reconnectTimer);
+      this.reconnectTimer = null;
+    }
     if (!config.gemini.apiKey) {
       console.warn('⚠️ GEMINI_API_KEY não configurada no .env.');
       this.isConnected = false;
@@ -236,7 +240,7 @@ export class GeminiLiveSession extends EventEmitter {
     const serverContent = response.serverContent;
     if (!serverContent) return;
 
-    console.log('📩 Gemini serverContent received:', JSON.stringify(serverContent));
+    // serverContent received (omitted raw base64 audio dump to save log space)
 
     if (serverContent.interrupted) {
       console.log('⚡ Gemini Live confirmou interrupção!');
@@ -247,7 +251,7 @@ export class GeminiLiveSession extends EventEmitter {
     const parts = serverContent.modelTurn?.parts;
     if (parts && Array.isArray(parts)) {
       for (const part of parts) {
-        console.log('🧩 Part received:', JSON.stringify({ hasText: !!part.text, text: part.text, thought: (part as any).thought, hasAudio: !!part.inlineData }));
+        // Part received
 
         if (part.inlineData && part.inlineData.data) {
           this.emit('audio_chunk', part.inlineData.data);

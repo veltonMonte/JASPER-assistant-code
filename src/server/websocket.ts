@@ -130,7 +130,6 @@ export class JasperWebSocketServer {
       ws.on('message', async (data: Buffer | string, isBinary: boolean) => {
         if (isBinary || (Buffer.isBuffer(data) && data[0] !== 123)) {
           const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as string);
-          console.log(`🎙️ [MOBILE] Áudio binário recebido: ${buf.length} bytes | isBinary=${isBinary} | GeminiLive=${!!this.geminiLive} | GeminiConnected=${this.geminiLive?.isLiveConnected() || false}`);
           const base64Pcm = buf.toString('base64');
           
           const isSpeaking = wakeWordManager.getState() === 'SPEAKING';
@@ -160,7 +159,9 @@ export class JasperWebSocketServer {
         try {
           const textData = data.toString();
           const payload = JSON.parse(textData);
+          if (payload.type !== "PCM_AUDIO_CHUNK") {
           console.log(`📨 [MSG] type=${payload.type} | keys=${Object.keys(payload).join(',')}`);
+          }
           
           // Tratar mensagem "setup" do APK nativo (ignorar, já configuramos no server)
           if (payload.type === 'setup') {
@@ -176,6 +177,9 @@ export class JasperWebSocketServer {
 
       ws.on('close', () => {
         console.log('📱 Cliente desconectado.');
+        if (this.activeClient === ws) {
+          this.activeClient = null;
+        }
       });
     });
   }
@@ -409,16 +413,7 @@ export class JasperWebSocketServer {
         }
 
         // Analisa a energia do áudio para controle de estado local e barge-in
-        const isSpeech = vadManager.processAudioEnergy(base64Pcm);
-        const buf = Buffer.from(base64Pcm, 'base64');
-        let chunkMax = 0;
-        for (let i = 0; i < buf.length - 1; i += 2) {
-          const s = Math.abs(buf.readInt16LE(i));
-          if (s > chunkMax) chunkMax = s;
-        }
-        if (Math.random() < 0.1 || chunkMax > 500) {
-          console.log("[Audio Level] chunkMax=" + chunkMax + " | isSpeech=" + isSpeech + " | bytes=" + buf.length);
-        }
+        vadManager.processAudioEnergy(base64Pcm);
 
         if (this.geminiLive && this.geminiLive.isLiveConnected()) {
           this.geminiLive.sendAudioChunk(base64Pcm, 16000);

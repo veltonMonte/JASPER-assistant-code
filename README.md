@@ -72,7 +72,7 @@ jasper/
 ### 1. Clonar / Acessar o Projeto
 Navegue até a pasta do projeto:
 ```bash
-cd /home/velton/.gemini/antigravity/scratch/jasper
+cd /home/velton/projetos/jasper
 ```
 
 ### 2. Instalar Dependências

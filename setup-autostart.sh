@@ -14,7 +14,7 @@ After=network.target
 
 [Service]
 Type=simple
-WorkingDirectory=/home/velton/.gemini/antigravity/scratch/jasper
+WorkingDirectory=/home/velton/projetos/jasper
 ExecStart=/usr/bin/npm run dev
 Restart=always
 RestartSec=5
@@ -32,7 +32,7 @@ After=network.target jasper-backend.service
 
 [Service]
 Type=simple
-WorkingDirectory=/home/velton/.gemini/antigravity/scratch/jasper/client
+WorkingDirectory=/home/velton/projetos/jasper/client
 ExecStart=/usr/bin/npm run dev
 Restart=always
 RestartSec=5

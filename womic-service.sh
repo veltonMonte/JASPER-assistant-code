@@ -65,6 +65,17 @@ move_active_recording_streams() {
   for stream_id in $(pactl list short source-outputs 2>/dev/null | awk '{print $1}'); do
     pactl move-source-output "$stream_id" "$target_source" 2>/dev/null || true
   done
+
+  # Garante ligação direta no PipeWire para navegadores (Firefox/Chrome)
+  for in_port in $(pw-link -i 2>/dev/null | grep -iE 'Firefox:input|Chromium:input|chrome:input' || true); do
+    if [ "$target_source" = "womic_mic.monitor" ]; then
+      if [[ "$in_port" == *"_FL" ]]; then
+        pw-link "womic_mic:monitor_FL" "$in_port" 2>/dev/null || true
+      else
+        pw-link "womic_mic:monitor_FR" "$in_port" 2>/dev/null || true
+      fi
+    fi
+  done
 }
 
 start_audio_bridge() {

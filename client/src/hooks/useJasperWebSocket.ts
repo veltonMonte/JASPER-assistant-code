@@ -732,16 +732,23 @@ export function useJasperWebSocket(): UseJasperReturn {
       });
       mediaStreamRef.current = stream;
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
-      // Não passar { sampleRate: 16000 } no Firefox para evitar erro de AudioNodes com sample-rate diferente
       const micCtx = new AudioCtx();
       micAudioContextRef.current = micCtx;
+      if (micCtx.state === 'suspended') {
+        await micCtx.resume();
+      }
       const inputSampleRate = micCtx.sampleRate || 48000;
       const source = micCtx.createMediaStreamSource(stream);
       const processor = micCtx.createScriptProcessor(4096, 1, 1);
       
       processor.onaudioprocess = (e) => {
+        // Silencia a saída do buffer para que o som do microfone não saia nos alto-falantes
+        for (let ch = 0; ch < e.outputBuffer.numberOfChannels; ch++) {
+          e.outputBuffer.getChannelData(ch).fill(0);
+        }
+
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
-        // Evita feedback acústico: quando o JASPER estiver falando, não envia o som dos alto-falantes de volta ao microfone
+        // Evita feedback acústico: quando o assistente fala, pausa o streaming
         if (stateRef.current === 'SPEAKING') return;
 
         const inputData = e.inputBuffer.getChannelData(0);
@@ -752,12 +759,8 @@ export function useJasperWebSocket(): UseJasperReturn {
         }));
       };
 
-      // Roteia através de um GainNode zerado para manter o processador ativo sem reproduzir o microfone nos alto-falantes
-      const muteGain = micCtx.createGain();
-      muteGain.gain.value = 0;
       source.connect(processor);
-      processor.connect(muteGain);
-      muteGain.connect(micCtx.destination);
+      processor.connect(micCtx.destination);
       audioProcessorRef.current = processor;
       setState('LISTENING');
     } catch (err: any) {

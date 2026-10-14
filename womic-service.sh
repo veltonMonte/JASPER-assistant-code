@@ -57,9 +57,6 @@ setup_womic_nodes() {
   if ! pactl list short sinks 2>/dev/null | grep -q "womic_mic"; then
     pactl load-module module-null-sink sink_name=womic_mic sink_properties=device.description="WOMic" 2>/dev/null || true
   fi
-  if ! pactl list short sources 2>/dev/null | grep -q "womic_source"; then
-    pactl load-module module-remap-source master=womic_mic.monitor source_name=womic_source source_properties=device.description="WO_Mic" 2>/dev/null || true
-  fi
 }
 
 # Move todos os fluxos de gravação ativos (navegador, etc) para uma fonte
@@ -83,8 +80,8 @@ start_audio_bridge() {
   BRIDGE_PID=$!
   
   sleep 0.5
-  pactl set-default-source womic_source 2>/dev/null || true
-  move_active_recording_streams "womic_source"
+  pactl set-default-source womic_mic.monitor 2>/dev/null || true
+  move_active_recording_streams "womic_mic.monitor"
   notify_backend "womic"
   echo "✅ Áudio do WO Mic roteado com sucesso para o sistema e aplicativos!"
 }

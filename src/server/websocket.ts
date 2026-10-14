@@ -62,10 +62,13 @@ export class JasperWebSocketServer {
 
     vadManager.on('silence_detected', () => {
       if (this.geminiLive && this.geminiLive.isLiveConnected()) {
-        console.log('🔇 [WebSocket] Silêncio detectado pelo VAD, aguardando Gemini processar.');
-        this.geminiLive.forceTurnComplete();
-        wakeWordManager.setState('PROCESSING');
-        this.broadcastState('PROCESSING');
+        const curState = wakeWordManager.getState();
+        if (curState === 'LISTENING') {
+          console.log('🔇 [WebSocket] Silêncio detectado pelo VAD, aguardando resposta do Gemini.');
+          this.geminiLive.forceTurnComplete();
+          wakeWordManager.setState('PROCESSING');
+          this.broadcastState('PROCESSING');
+        }
       }
     });
 
@@ -176,6 +179,8 @@ export class JasperWebSocketServer {
           const buf = Buffer.isBuffer(data) ? data : Buffer.from(data as string);
           const base64Pcm = buf.toString('base64');
           
+          const userIsSpeaking = vadManager.processAudioEnergy(base64Pcm);
+
           const isSpeaking = wakeWordManager.getState() === 'SPEAKING';
           const wasInterrupted = vadManager.onUserAudioReceived(isSpeaking);
           if (wasInterrupted) {
@@ -184,13 +189,10 @@ export class JasperWebSocketServer {
             this.broadcastToClients({ type: 'INTERRUPT' });
           }
 
-          if (wakeWordManager.getState() !== 'LISTENING') {
+          if (userIsSpeaking && (wakeWordManager.getState() === 'IDLE' || wakeWordManager.getState() === 'PROCESSING')) {
             wakeWordManager.setState('LISTENING');
             this.broadcastState('LISTENING');
           }
-
-          // Analisa energia do áudio para controle de silêncio e conclusão de turno
-          vadManager.processAudioEnergy(base64Pcm);
 
           if (this.geminiLive) {
             this.geminiLive.sendAudioChunk(base64Pcm, 16000);
@@ -319,6 +321,7 @@ export class JasperWebSocketServer {
         if (wakeWordManager.getState() !== 'SPEAKING') {
           wakeWordManager.setState('SPEAKING');
           this.broadcastState('SPEAKING');
+          vadManager.notifyAssistantSpeaking(true);
         }
 
         this.broadcastToClients({
@@ -340,6 +343,7 @@ export class JasperWebSocketServer {
           if (wakeWordManager.getState() !== 'SPEAKING') {
             wakeWordManager.setState('SPEAKING');
             this.broadcastState('SPEAKING');
+            vadManager.notifyAssistantSpeaking(true);
           }
 
           this.broadcastToClients({
@@ -398,6 +402,7 @@ export class JasperWebSocketServer {
 
       this.geminiLive.on('interrupted', () => {
         console.log('⚡ Barge-in: cancelando áudio no cliente.');
+        vadManager.notifyAssistantSpeaking(false);
         this.turnAccumulatedText = '';
         this.lastCleanText = '';
         wakeWordManager.setState('LISTENING');
@@ -406,6 +411,7 @@ export class JasperWebSocketServer {
       });
 
       this.geminiLive.on('turn_complete', () => {
+        vadManager.notifyAssistantSpeaking(false);
         this.turnAccumulatedText = '';
         this.lastCleanText = '';
         setTimeout(() => {
@@ -477,6 +483,10 @@ export class JasperWebSocketServer {
       case 'PCM_AUDIO_CHUNK': {
         if (!base64Pcm) return;
 
+        // 1. Analisa a energia do áudio para controle de silêncio e detecção de fala
+        const userIsSpeaking = vadManager.processAudioEnergy(base64Pcm);
+
+        // 2. Se o assistente estiver falando, checa barge-in (interrupção pelo usuário)
         const isSpeaking = wakeWordManager.getState() === 'SPEAKING';
         const wasInterrupted = vadManager.onUserAudioReceived(isSpeaking);
         if (wasInterrupted) {
@@ -485,13 +495,10 @@ export class JasperWebSocketServer {
           this.broadcastToClients({ type: 'INTERRUPT' });
         }
 
-        if (wakeWordManager.getState() === 'IDLE') {
+        if (userIsSpeaking && (wakeWordManager.getState() === 'IDLE' || wakeWordManager.getState() === 'PROCESSING')) {
           wakeWordManager.setState('LISTENING');
           this.broadcastState('LISTENING');
         }
-
-        // Analisa a energia do áudio para controle de estado local e barge-in
-        vadManager.processAudioEnergy(base64Pcm);
 
         if (this.geminiLive && this.geminiLive.isLiveConnected()) {
           this.geminiLive.sendAudioChunk(base64Pcm, 16000);

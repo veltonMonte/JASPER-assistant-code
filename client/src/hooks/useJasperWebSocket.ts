@@ -175,7 +175,7 @@ function downsampleAndConvertToInt16Base64(
   input: Float32Array,
   inSampleRate: number,
   outSampleRate = 16000,
-  gain = 2.5
+  gain = 1.0
 ): string {
   let int16Array: Int16Array;
   
@@ -215,6 +215,8 @@ function float32ToInt16Base64(float32Array: Float32Array): string {
 
 export function useJasperWebSocket(): UseJasperReturn {
   const [state, setState] = useState<JasperState>('IDLE');
+  const stateRef = useRef<JasperState>('IDLE');
+  stateRef.current = state;
   const [isConnected, setIsConnected] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [transcript, setTranscript] = useState('');
@@ -739,16 +741,23 @@ export function useJasperWebSocket(): UseJasperReturn {
       
       processor.onaudioprocess = (e) => {
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+        // Evita feedback acústico: quando o JASPER estiver falando, não envia o som dos alto-falantes de volta ao microfone
+        if (stateRef.current === 'SPEAKING') return;
+
         const inputData = e.inputBuffer.getChannelData(0);
-        const base64Audio = downsampleAndConvertToInt16Base64(inputData, inputSampleRate, 16000);
+        const base64Audio = downsampleAndConvertToInt16Base64(inputData, inputSampleRate, 16000, 1.0);
         wsRef.current.send(JSON.stringify({
           type: 'PCM_AUDIO_CHUNK',
           base64Pcm: base64Audio
         }));
       };
 
+      // Roteia através de um GainNode zerado para manter o processador ativo sem reproduzir o microfone nos alto-falantes
+      const muteGain = micCtx.createGain();
+      muteGain.gain.value = 0;
       source.connect(processor);
-      processor.connect(micAudioContextRef.current.destination);
+      processor.connect(muteGain);
+      muteGain.connect(micCtx.destination);
       audioProcessorRef.current = processor;
       setState('LISTENING');
     } catch (err: any) {

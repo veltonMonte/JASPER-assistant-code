@@ -15,14 +15,29 @@ export class VoiceActivityDetector extends EventEmitter {
 
   private silenceTimer: NodeJS.Timeout | null = null;
   public isUserCurrentlySpeaking = false;
-  private noiseFloor = 1000;
+  private noiseFloor = 800;
   private isSilence = true;
+  private speakingStartTime = 0;
+
+  public notifyAssistantSpeaking(speaking: boolean): void {
+    if (speaking) {
+      this.speakingStartTime = Date.now();
+      this.reset();
+    } else {
+      this.speakingStartTime = 0;
+    }
+  }
 
   /**
-   * Processa a entrada de voz do usuário. Se o JASPER estiver atualmente falando, dispara um evento de interrupção (Barge-in).
+   * Processa a entrada de voz do usuário. Se o JASPER estiver atualmente falando há pelo menos 600ms, dispara interrupção.
    */
   public onUserAudioReceived(isJasperSpeaking: boolean): boolean {
-    if (isJasperSpeaking && this.isUserCurrentlySpeaking) {
+    if (!isJasperSpeaking) return false;
+    
+    // Ignora os primeiros 600ms de fala do assistente para evitar ecos residuais
+    if (Date.now() - this.speakingStartTime < 600) return false;
+
+    if (this.isUserCurrentlySpeaking) {
       console.log('⚡ [VAD Barge-in] Usuário começou a falar durante a resposta do JASPER! Interrompendo áudio imediatamente...');
       this.state.interrupted = true;
       this.emit('interrupted');
@@ -32,7 +47,7 @@ export class VoiceActivityDetector extends EventEmitter {
   }
 
   /**
-   * Analisa a energia do áudio para detectar fim de fala usando piso de ruído dinâmico.
+   * Analisa a energia do áudio para detectar fala com limiar dinâmico protegido contra saturação.
    */
   public processAudioEnergy(base64Pcm: string): boolean {
     const buffer = Buffer.from(base64Pcm, 'base64');
@@ -40,44 +55,41 @@ export class VoiceActivityDetector extends EventEmitter {
     
     // Calcula a amplitude máxima no chunk (16-bit PCM)
     for (let i = 0; i < buffer.length - 1; i += 2) {
-      const sample = buffer.readInt16LE(i);
-      if (Math.abs(sample) > maxAmp) {
-        maxAmp = Math.abs(sample);
+      const sample = Math.abs(buffer.readInt16LE(i));
+      if (sample > maxAmp) {
+        maxAmp = sample;
       }
     }
 
-    // Atualiza o piso de ruído dinamicamente (adapta-se ao ambiente)
-    if (maxAmp > 0) {
-      this.noiseFloor = (this.noiseFloor * 0.99) + (maxAmp * 0.01);
+    // Atualiza o piso de ruído apenas se for ruído ambiente baixo (evita que a voz humana infle o piso)
+    if (maxAmp > 0 && maxAmp < 3000) {
+      this.noiseFloor = (this.noiseFloor * 0.98) + (maxAmp * 0.02);
     }
-    // Evita que o noiseFloor suba muito rápido durante a fala
-    const threshold = Math.max(1000, this.noiseFloor * 2.5); 
-
-    const SILENCE_DURATION_MS = 1200; // 1.2s de silêncio
+    // Trava o piso de ruído em limites realistas
+    this.noiseFloor = Math.max(400, Math.min(2500, this.noiseFloor));
+    
+    // Threshold calibrado para voz humana clara
+    const threshold = Math.max(1800, this.noiseFloor * 1.8);
+    const SILENCE_DURATION_MS = 1000;
 
     if (maxAmp > threshold) {
-      // Usuário está falando
       this.isUserCurrentlySpeaking = true;
       this.isSilence = false;
       
-      // Reseta o timer de silêncio
       if (this.silenceTimer) {
         clearTimeout(this.silenceTimer);
         this.silenceTimer = null;
       }
-      return true; // Áudio com fala
+      return true;
     } else {
       this.isSilence = true;
-      // Silêncio detectado (energia baixa)
       if (this.isUserCurrentlySpeaking && !this.silenceTimer) {
         this.silenceTimer = setTimeout(() => {
-          console.log(`🔇 [VAD] Silêncio detectado no servidor. NoiseFloor: ${this.noiseFloor.toFixed(0)}, Threshold: ${threshold.toFixed(0)}, MaxAmp: ${maxAmp}`);
           this.isUserCurrentlySpeaking = false;
           this.silenceTimer = null;
           this.emit('silence_detected');
         }, SILENCE_DURATION_MS);
       }
-      // Mesmo com energia baixa, se o usuário estava falando recentemente, repassa o áudio para o Gemini processar o silêncio final
       return this.isUserCurrentlySpeaking;
     }
   }

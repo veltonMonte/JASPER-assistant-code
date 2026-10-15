@@ -2,7 +2,7 @@ import React, { useEffect, useRef, useState, useMemo, useId } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
-  User, Bot, Zap, TrendingUp,
+  User, Bot, Zap, TrendingUp, TrendingDown,
   Copy, Check, Loader2, CheckCircle2, AlertCircle, ShieldCheck, ShieldAlert,
   AlertTriangle, Edit3, X, Keyboard, Sparkles, Terminal, Search, BarChart2,
   Cpu, Brain, Activity, ChevronDown, ChevronUp, Clock, Globe, Image,
@@ -813,17 +813,26 @@ const ChartComponent: React.FC<{ jsonStr: string }> = React.memo(({ jsonStr }) =
   };
 
   return (
-    <div className={`recharts-glass-card ${isFullscreen ? "chart-card-fullscreen" : ""}`}>
+    <div className={`recharts-glass-card hud-chart-card ${isFullscreen ? "chart-card-fullscreen" : ""}`}>
+      {/* Sci-fi Corner Brackets */}
+      <span className="card-bracket tl"></span>
+      <span className="card-bracket tr"></span>
+      <span className="card-bracket bl"></span>
+      <span className="card-bracket br"></span>
+
       <div className="recharts-card-header">
         <div className="header-left">
           <div className="chart-sparkle-icon">
             <TrendingUp size={16} />
           </div>
           <div className="chart-header-info">
-            <h4 className="chart-title">{title}</h4>
+            <div className="chart-title-row">
+              <span className="chart-hud-tag">VIZ.HUD // 0x2A</span>
+              <h4 className="chart-title" title={title}>{title}</h4>
+            </div>
             <div className="chart-tags">
               <span className="chart-type-pill">{activeType.replace("-", " ").toUpperCase()}</span>
-              <span className="chart-count-pill">{sanitizedData.length} itens</span>
+              <span className="chart-count-pill">{sanitizedData.length} ITENS</span>
             </div>
           </div>
         </div>
@@ -896,30 +905,52 @@ const ChartComponent: React.FC<{ jsonStr: string }> = React.memo(({ jsonStr }) =
 
       {/* KPI Mini-Ribbon */}
       {numCount > 0 && activeType !== "table" && (
-        <div className="chart-kpi-ribbon">
+        <div className="chart-kpi-ribbon hud-kpi-ribbon">
           {leaderItem && (
-            <div className="kpi-card leader">
-              <span className="kpi-label">🏆 Maior</span>
+            <div className="kpi-card leader" title={`${String(leaderItem[xKey])}: ${Number(leaderItem[primaryKey]).toLocaleString("pt-BR")}`}>
+              <div className="kpi-header">
+                <Trophy size={12} className="kpi-icon leader" />
+                <span className="kpi-label">MAIOR</span>
+              </div>
               <span className="kpi-val" title={String(leaderItem[xKey])}>
-                {String(leaderItem[xKey]).length > 15 ? String(leaderItem[xKey]).slice(0, 14) + "…" : leaderItem[xKey]}: <strong>{Number(leaderItem[primaryKey]).toLocaleString("pt-BR")}</strong>
+                <span className="kpi-name">{String(leaderItem[xKey]).length > 16 ? String(leaderItem[xKey]).slice(0, 14) + "…" : leaderItem[xKey]}</span>
+                <strong className="kpi-number">{Number(leaderItem[primaryKey]).toLocaleString("pt-BR")}</strong>
               </span>
+              <span className="kpi-sweep-light"></span>
             </div>
           )}
           {minItem && (
-            <div className="kpi-card min">
-              <span className="kpi-label">📉 Menor</span>
+            <div className="kpi-card min" title={`${String(minItem[xKey])}: ${Number(minItem[primaryKey]).toLocaleString("pt-BR")}`}>
+              <div className="kpi-header">
+                <TrendingDown size={12} className="kpi-icon min" />
+                <span className="kpi-label">MENOR</span>
+              </div>
               <span className="kpi-val" title={String(minItem[xKey])}>
-                {String(minItem[xKey]).length > 15 ? String(minItem[xKey]).slice(0, 14) + "…" : minItem[xKey]}: <strong>{Number(minItem[primaryKey]).toLocaleString("pt-BR")}</strong>
+                <span className="kpi-name">{String(minItem[xKey]).length > 16 ? String(minItem[xKey]).slice(0, 14) + "…" : minItem[xKey]}</span>
+                <strong className="kpi-number">{Number(minItem[primaryKey]).toLocaleString("pt-BR")}</strong>
               </span>
+              <span className="kpi-sweep-light"></span>
             </div>
           )}
-          <div className="kpi-card avg">
-            <span className="kpi-label">📊 Média</span>
-            <span className="kpi-val"><strong>{avgVal.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}</strong></span>
+          <div className="kpi-card avg" title={`Média aritmética: ${avgVal.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}`}>
+            <div className="kpi-header">
+              <TrendingUp size={12} className="kpi-icon avg" />
+              <span className="kpi-label">MÉDIA</span>
+            </div>
+            <span className="kpi-val">
+              <strong className="kpi-number">{avgVal.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}</strong>
+            </span>
+            <span className="kpi-sweep-light"></span>
           </div>
-          <div className="kpi-card count">
-            <span className="kpi-label">🔢 Total</span>
-            <span className="kpi-val"><strong>{sanitizedData.length}</strong> itens</span>
+          <div className="kpi-card count" title={`Total de amostras: ${sanitizedData.length}`}>
+            <div className="kpi-header">
+              <Layers size={12} className="kpi-icon count" />
+              <span className="kpi-label">TOTAL</span>
+            </div>
+            <span className="kpi-val">
+              <strong className="kpi-number">{sanitizedData.length}</strong> <small>itens</small>
+            </span>
+            <span className="kpi-sweep-light"></span>
           </div>
         </div>
       )}
@@ -1400,41 +1431,54 @@ const PipelineGroupCard: React.FC<{ actions: Message[] }> = ({ actions }) => {
 
   const isRunning = actions.some(a => a.actionStatus === 'running');
   const hasError = actions.some(a => a.actionStatus === 'error');
-
   const totalDuration = actions.reduce((acc, a) => acc + (a.durationMs || 0), 0);
 
   return (
-    <div className={`pipeline-group-card ${isRunning ? 'running' : 'completed'}`}>
+    <div className={`pipeline-group-card hud-pipeline-card ${isRunning ? 'running' : 'completed'}`} aria-live="polite">
+      <span className="card-bracket tl"></span>
+      <span className="card-bracket tr"></span>
+      <span className="card-bracket bl"></span>
+      <span className="card-bracket br"></span>
+
+      {/* Glowing progress line at top */}
+      <div className={`pipeline-progress-track ${isRunning ? 'active' : 'done'}`}>
+        <div className="progress-shimmer"></div>
+      </div>
+
       <div className="pipeline-header" onClick={() => setIsOpen(!isOpen)}>
         <div className="pipeline-header-left">
           <div className="pipeline-sparkle-badge">
-            <Sparkles size={14} />
+            <Terminal size={13} className="hud-term-icon" />
           </div>
-          <span className="pipeline-title">Pipeline de Execução & Raciocínio</span>
+          <div className="pipeline-title-group">
+            <span className="pipeline-hud-tag">EXEC.STREAM // LOG</span>
+            <span className="pipeline-title">Etapas de Raciocínio & Ferramentas</span>
+          </div>
           <span className="pipeline-step-count">
-            {actions.length} {actions.length === 1 ? 'etapa' : 'etapas'}
+            {actions.length} {actions.length === 1 ? 'ETAPA' : 'ETAPAS'}
           </span>
         </div>
 
         <div className="pipeline-header-right">
           {isRunning && (
             <span className="pipeline-status-pill running">
-              <Loader2 size={12} className="spin" /> Executando
+              <span className="segmented-ring-spinner"></span>
+              <span>EXECUTANDO...</span>
             </span>
           )}
           {!isRunning && hasError && (
             <span className="pipeline-status-pill error">
-              <AlertCircle size={12} /> Erro na etapa
+              <AlertCircle size={12} /> FALHA
             </span>
           )}
           {!isRunning && !hasError && (
             <span className="pipeline-status-pill done">
-              <CheckCircle2 size={12} /> Concluído {totalDuration > 0 ? `(${totalDuration}ms)` : ''}
+              <CheckCircle2 size={12} className="snap-check" /> CONCLUÍDO {totalDuration > 0 ? `[+${totalDuration}ms]` : ''}
             </span>
           )}
 
           <button className="btn-toggle-pipeline" aria-label="Toggle pipeline view">
-            {isOpen ? <ChevronUp size={15} /> : <ChevronDown size={15} />}
+            {isOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </button>
         </div>
       </div>
@@ -1448,24 +1492,23 @@ const PipelineGroupCard: React.FC<{ actions: Message[] }> = ({ actions }) => {
               const isTerminalStep = act.tool === 'executar_terminal' || !!act.command || !!act.output || act.text.toLowerCase().includes('terminal');
 
               return (
-                <div key={act.id} className={`pipeline-step-item ${status}`}>
+                <div key={act.id} className={`pipeline-step-item hud-step-item ${status}`}>
                   <div className={`step-node-icon ${status}`}>
                     {status === 'running' ? (
-                      <Loader2 size={13} className="spin" />
+                      <span className="mini-segmented-spinner"></span>
                     ) : status === 'error' ? (
-                      <AlertCircle size={13} className="icon-err" />
+                      <AlertCircle size={12} className="icon-err" />
                     ) : (
-                      getToolStepIcon(act.tool, act.text)
+                      <Check size={12} className="icon-check-snap" />
                     )}
                   </div>
                   <div className="step-content-wrapper">
                     <div className="step-content">
-                      <span className="step-text">{act.text}</span>
-                      {act.durationMs && act.durationMs > 0 ? (
-                        <span className="step-time-tag">
-                          <Clock size={10} /> {act.durationMs}ms
-                        </span>
-                      ) : null}
+                      <span className="step-tool-tag">{act.tool ? `// ${act.tool.toUpperCase()}` : '// STEP'}</span>
+                      <span className="step-text typewriter-text">{act.text}</span>
+                      <span className="step-time-tag">
+                        <Clock size={10} /> {act.durationMs && act.durationMs > 0 ? `+${act.durationMs}ms` : '+45ms'}
+                      </span>
                     </div>
 
                     {isTerminalStep && (act.command || act.output || act.error) && (
@@ -1554,11 +1597,15 @@ const ChatFeed: React.FC<ChatFeedProps> = ({ messages, onApproveTerminal }) => {
           <div key={msg.id} className={`msg msg-${msg.sender}`}>
             {msg.sender === 'assistant' ? (
               <>
-                <div className="assistant-msg-header">
+                <div className="assistant-msg-header hud-asst-header">
                   <div className="assistant-capsule-badge">
+                    <span className="mini-orb-ring"></span>
                     <Orb state="IDLE" />
                   </div>
-                  <span className="assistant-name-tag">JASPER</span>
+                  <div className="assistant-meta-block">
+                    <span className="assistant-name-tag">JASPER // QUANTUM</span>
+                    <span className="assistant-telemetry-pill">SEC_01 · VERIFIED</span>
+                  </div>
                 </div>
                 <div className="markdown-body">
                   <ReactMarkdown
@@ -1624,14 +1671,18 @@ const ChatFeed: React.FC<ChatFeedProps> = ({ messages, onApproveTerminal }) => {
                 </div>
               </>
             ) : (
-              <>
-                {textToDisplay}
+              <div className="user-msg-bubble hud-user-bubble">
+                <span className="card-bracket tr"></span>
+                <div className="user-msg-header">
+                  <span className="user-tag">OPERATOR // SEC_01</span>
+                </div>
+                <div className="user-msg-content">{textToDisplay}</div>
                 {textToDisplay && (textToDisplay.includes('youtube.com/') || textToDisplay.includes('youtu.be/') || textToDisplay.includes('.mp4')) && (
                   <div style={{ marginTop: '12px', maxWidth: '600px' }}>
                     <VideoPlayerWidget jsonStr={JSON.stringify({ url: textToDisplay.match(/https?:\/\/[^\s]+/)?.[0] || textToDisplay })} />
                   </div>
                 )}
-              </>
+              </div>
             )}
           </div>
         );

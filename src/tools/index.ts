@@ -4,7 +4,7 @@ import { enviarMensagem } from './messaging.js';
 import { abrirPrograma } from './applications.js';
 import { consultarHorario, criarLembrete, salvarMemoria, buscarMemoria, agendarAlarme } from './system.js';
 import { toggleDevice, getDeviceStatus } from './smarthome.js';
-import { executarTerminal } from './terminal.js';
+import { executarTerminal, solicitarTerminalPorVoz, confirmarComandoTerminal } from './terminal.js';
 import { baixarMidia } from './media.js';
 import { ajustarPersonalidade, consultarPersonalidade, restaurarPersonalidadePadrao } from './personality.js';
 
@@ -257,7 +257,7 @@ export const geminiToolDeclarations = [
   },
   {
     name: 'executar_terminal',
-    description: 'Executa comandos no terminal do sistema local do usuário (Linux). Use para listar arquivos, rodar scripts, gerenciar processos, etc. O comando ficará pausado até que o usuário aprove.',
+    description: 'Solicita a execução de um comando no terminal Linux do usuário (listar arquivos, rodar scripts, consultar processos, git, etc). Todo comando exige confirmação do usuário antes de rodar: em conversa por voz, a ferramenta retorna status "aguardando_confirmacao" e você deve perguntar ao usuário se ele confirma, depois chamar confirmar_comando_terminal. Comandos destrutivos críticos (sudo, formatação, desligamento, rm na raiz) são bloqueados.',
     parameters: {
       type: 'OBJECT',
       properties: {
@@ -267,6 +267,24 @@ export const geminiToolDeclarations = [
         },
       },
       required: ['comando'],
+    },
+  },
+  {
+    name: 'confirmar_comando_terminal',
+    description: 'Registra a resposta verbal do usuário para o comando de terminal que está aguardando confirmação. Chame SOMENTE depois de ouvir o usuário responder. aprovado=true se ele disse sim/confirmo/pode executar; aprovado=false se ele negou ou cancelou. Retorna a saída do comando quando aprovado.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        aprovado: {
+          type: 'BOOLEAN',
+          description: 'true se o usuário autorizou a execução, false se negou.',
+        },
+        lembrar: {
+          type: 'BOOLEAN',
+          description: 'true se o usuário pediu para sempre permitir este tipo de comando sem perguntar novamente nesta sessão.',
+        },
+      },
+      required: ['aprovado'],
     },
   },
   {
@@ -309,7 +327,12 @@ import { toolEvents } from '../events/toolEvents.js';
 /**
  * Executa a ferramenta solicitada pelo Gemini ou pelo Intent Router pelo nome
  */
-export async function executeToolByName(name: string, args: Record<string, any> = {}): Promise<any> {
+export interface ToolExecutionContext {
+  /** true quando chamado pela sessão de voz (Gemini Live): ferramentas de aprovação não bloqueiam o modelo */
+  live?: boolean;
+}
+
+export async function executeToolByName(name: string, args: Record<string, any> = {}, ctx: ToolExecutionContext = {}): Promise<any> {
   console.log(`🛠️ Executando Ferramenta: [${name}] com argumentos:`, JSON.stringify(args));
   const startTime = Date.now();
   toolEvents.emit('pipeline_action_start', { tool: name, args });
@@ -406,7 +429,12 @@ export async function executeToolByName(name: string, args: Record<string, any> 
         result = { url: args.url, success: true };
         break;
       case 'executar_terminal':
-        result = await executarTerminal(args.comando || '');
+        result = ctx.live
+          ? await solicitarTerminalPorVoz(args.comando || '')
+          : await executarTerminal(args.comando || '');
+        break;
+      case 'confirmar_comando_terminal':
+        result = await confirmarComandoTerminal(args.aprovado === true || args.aprovado === 'true', args.lembrar === true || args.lembrar === 'true');
         break;
       case 'baixar_midia':
         result = await baixarMidia(args.url || '', args.tipo || 'video');

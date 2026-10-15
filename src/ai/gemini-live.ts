@@ -158,6 +158,8 @@ export class GeminiLiveSession extends EventEmitter {
         systemInstruction: {
           parts: [{ text: fullPrompt }],
         },
+        // Transcrição da fala do usuário: usada para reconhecer confirmações verbais de comandos de terminal
+        inputAudioTranscription: {},
         tools: [
           {
             functionDeclarations: geminiToolDeclarations as any,
@@ -231,7 +233,7 @@ export class GeminiLiveSession extends EventEmitter {
           this.emit('tool_call_start', { name: fc.name, args: fc.args });
 
           try {
-            const toolResult = await executeToolByName(fc.name, fc.args || {});
+            const toolResult = await executeToolByName(fc.name, fc.args || {}, { live: true });
             this.emit('tool_call_end', { name: fc.name, result: toolResult });
             this.sendToolResponse(fc.id || fc.name, fc.name, toolResult);
           } catch (err: any) {
@@ -248,6 +250,10 @@ export class GeminiLiveSession extends EventEmitter {
     if (!serverContent) return;
 
     // serverContent received (omitted raw base64 audio dump to save log space)
+
+    if (serverContent.inputTranscription?.text) {
+      this.emit('input_transcription', serverContent.inputTranscription.text);
+    }
 
     if (serverContent.interrupted) {
       console.log('⚡ Gemini Live confirmou interrupção!');

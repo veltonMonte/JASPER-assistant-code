@@ -1,4 +1,11 @@
 import { executeToolByName } from '../tools/index.js';
+import {
+  getPendingTerminalRequest,
+  interpretApprovalSpeech,
+  resolveTerminalApproval,
+  wantsRemember,
+  interpretTerminalIntent,
+} from '../tools/terminal.js';
 
 export interface RouteResult {
   handledDirectly: boolean;
@@ -17,6 +24,60 @@ export class IntentRouter {
   public async route(input: string): Promise<RouteResult> {
     const startTime = Date.now();
     const cleanText = input.toLowerCase().trim();
+
+    // 0. INTENÇÃO: Confirmação ou Negação de Comando de Terminal Pendente
+    const pending = getPendingTerminalRequest();
+    if (pending) {
+      const decision = interpretApprovalSpeech(cleanText, pending.riskLevel);
+      if (decision === 'approve') {
+        const remember = wantsRemember(cleanText);
+        const res = await resolveTerminalApproval(pending.id, { approved: true, remember }, 'voice');
+        const speech = res?.success
+          ? `Comando "${res.comando}" executado com sucesso.${res.output ? " Saída:\n" + res.output.slice(0, 500) : ""}`
+          : `O comando falhou: ${res?.message || res?.error || "erro desconhecido"}`;
+        return {
+          handledDirectly: true,
+          intentName: 'TERMINAL_APPROVE',
+          responseSpeech: speech,
+          toolResult: res,
+          durationMs: Date.now() - startTime,
+        };
+      }
+      if (decision === 'deny') {
+        const res = await resolveTerminalApproval(pending.id, { approved: false }, 'voice');
+        return {
+          handledDirectly: true,
+          intentName: 'TERMINAL_DENY',
+          responseSpeech: 'Entendido. O comando de terminal foi cancelado.',
+          toolResult: res,
+          durationMs: Date.now() - startTime,
+        };
+      }
+      if (decision === 'needs_strong') {
+        return {
+          handledDirectly: true,
+          intentName: 'TERMINAL_NEEDS_STRONG',
+          responseSpeech: 'Este comando é de alto risco. Por favor, diga explicitamente "confirmo" ou "autorizo" para que eu possa executá-lo.',
+          durationMs: Date.now() - startTime,
+        };
+      }
+    }
+
+    // 0.1 INTENÇÃO: Comando de Terminal em Linguagem Natural
+    const termIntent = interpretTerminalIntent(cleanText);
+    if (termIntent) {
+      const toolRes = await executeToolByName('executar_terminal', { comando: termIntent.command });
+      const speech = toolRes.status === 'aguardando_confirmacao'
+        ? `Solicitei a permissão para ${termIntent.description} (comando: "${termIntent.command}"). Você confirma a execução?`
+        : (toolRes.message || 'Comando executado com sucesso.');
+      return {
+        handledDirectly: true,
+        intentName: 'TERMINAL_COMMAND_REQUEST',
+        responseSpeech: speech,
+        toolResult: toolRes,
+        durationMs: Date.now() - startTime,
+      };
+    }
 
     // 1. INTENÇÃO: Ligar o PC (Wake-on-LAN)
     if (

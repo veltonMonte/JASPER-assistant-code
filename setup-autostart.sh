@@ -42,12 +42,31 @@ Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin
 WantedBy=default.target
 EOF
 
+# 3. Serviço WO Mic Audio Bridge
+cat << 'EOF' > "$SERVICE_DIR/jasper-womic.service"
+[Unit]
+Description=JASPER WO Mic Audio Bridge Service
+After=network.target sound.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/velton/projetos/jasper
+ExecStart=/bin/bash /home/velton/projetos/jasper/womic-service.sh
+Restart=always
+RestartSec=3
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/bin
+
+[Install]
+WantedBy=default.target
+EOF
+
 echo "Recarregando daemon do systemd..."
 systemctl --user daemon-reload
 
 echo "Habilitando inicialização automática dos serviços..."
 systemctl --user enable jasper-backend.service
 systemctl --user enable jasper-frontend.service
+systemctl --user enable jasper-womic.service
 
 echo "Habilitando permanência de login no boot (linger)..."
 loginctl enable-linger "$USER" || true
@@ -55,6 +74,7 @@ loginctl enable-linger "$USER" || true
 echo "Iniciando os serviços agora..."
 systemctl --user start jasper-backend.service
 systemctl --user start jasper-frontend.service
+systemctl --user start jasper-womic.service
 
 echo "=== Configuração Concluída com Sucesso! ==="
 echo "Status do Backend:"
@@ -62,3 +82,6 @@ systemctl --user status jasper-backend.service --no-pager || true
 echo ""
 echo "Status do Frontend:"
 systemctl --user status jasper-frontend.service --no-pager || true
+echo ""
+echo "Status do WO Mic:"
+systemctl --user status jasper-womic.service --no-pager || true

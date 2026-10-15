@@ -632,6 +632,11 @@ export function useJasperWebSocket(): UseJasperReturn {
               approvalStatus: 'pending'
             }]);
             break;
+          case 'LIVE_TRANSCRIPT':
+            if (data.transcript) {
+              setTranscript(data.transcript);
+            }
+            break;
           case 'TERMINAL_APPROVAL_STATUS_UPDATE':
             setMessages(prev => prev.map(m => {
               if (m.id === data.id) {
@@ -640,6 +645,8 @@ export function useJasperWebSocket(): UseJasperReturn {
                   approvalStatus: data.approved ? (data.customCommand ? 'edited' : 'approved') : 'denied',
                   executedCommand: data.customCommand || m.command,
                   remember: data.remember,
+                  output: data.result?.output,
+                  error: data.result?.error,
                 };
               }
               return m;

@@ -7,6 +7,14 @@ import { GeminiLiveSession } from '../ai/gemini-live.js';
 import { jasperAgent } from '../agent/agent.js';
 import { vadManager } from '../voice/vad.js';
 import { toolEvents } from '../events/toolEvents.js';
+import {
+  registerUserSpeech,
+  appendUserTranscript,
+  getPendingTerminalRequest,
+  interpretApprovalSpeech,
+  resolveTerminalApproval,
+  wantsRemember,
+} from '../tools/terminal.js';
 
 export class JasperWebSocketServer {
   private wss: WebSocketServer | null = null;
@@ -57,6 +65,21 @@ export class JasperWebSocketServer {
         id: payload.id,
         command: payload.command,
         riskLevel: payload.riskLevel || 'medium',
+      });
+    });
+
+    toolEvents.on('terminal_approval_resolved', (payload: any) => {
+      if (this.pendingTerminalApprovalId === payload.id) {
+        this.pendingTerminalApprovalId = null;
+      }
+      this.broadcastToClients({
+        type: 'TERMINAL_APPROVAL_STATUS_UPDATE',
+        id: payload.id,
+        approved: payload.approved,
+        command: payload.command,
+        customCommand: payload.customCommand,
+        remember: payload.remember,
+        result: payload.result,
       });
     });
 
@@ -180,6 +203,9 @@ export class JasperWebSocketServer {
           const base64Pcm = buf.toString('base64');
           
           const userIsSpeaking = vadManager.processAudioEnergy(base64Pcm);
+          if (userIsSpeaking) {
+            registerUserSpeech();
+          }
 
           const isSpeaking = wakeWordManager.getState() === 'SPEAKING';
           const wasInterrupted = vadManager.onUserAudioReceived(isSpeaking);
@@ -330,6 +356,32 @@ export class JasperWebSocketServer {
           sampleRate: 24000,
           format: 'pcm16',
         });
+      });
+
+      this.geminiLive.on('input_transcription', (userText: string) => {
+        if (!userText) return;
+        registerUserSpeech();
+        appendUserTranscript(userText);
+        console.log(`🗣️ [Transcrição do Usuário]: "${userText}"`);
+
+        this.broadcastToClients({
+          type: 'LIVE_TRANSCRIPT',
+          transcript: userText,
+        });
+
+        // Se houver comando de terminal aguardando e o usuário falou a decisão, resolve imediatamente
+        const pending = getPendingTerminalRequest();
+        if (pending) {
+          const decision = interpretApprovalSpeech(userText, pending.riskLevel);
+          if (decision === 'approve') {
+            console.log(`[Terminal] Comando aprovado por voz (transcrição do Gemini Live): "${userText}"`);
+            const remember = wantsRemember(userText);
+            void resolveTerminalApproval(pending.id, { approved: true, remember }, 'voice');
+          } else if (decision === 'deny') {
+            console.log(`[Terminal] Comando negado por voz (transcrição do Gemini Live): "${userText}"`);
+            void resolveTerminalApproval(pending.id, { approved: false }, 'voice');
+          }
+        }
       });
 
       this.geminiLive.on('text_chunk', (text: string) => {
@@ -485,6 +537,9 @@ export class JasperWebSocketServer {
 
         // 1. Analisa a energia do áudio para controle de silêncio e detecção de fala
         const userIsSpeaking = vadManager.processAudioEnergy(base64Pcm);
+        if (userIsSpeaking) {
+          registerUserSpeech();
+        }
 
         // 2. Se o assistente estiver falando, checa barge-in (interrupção pelo usuário)
         const isSpeaking = wakeWordManager.getState() === 'SPEAKING';
@@ -557,38 +612,47 @@ export class JasperWebSocketServer {
       case 'VOICE_COMMAND': {
         if (!text) return;
         console.log(`💬 Comando recebido: "${text}"`);
+        registerUserSpeech();
+        appendUserTranscript(text);
 
         const lowerText = text.toLowerCase().trim();
         
-        // Dynamic voice/text approval recognition for pending requests
-        if (this.pendingTerminalApprovalId) {
-          const isAffirmative = isAffirmativeApproval(lowerText);
-          const isNegative = isNegativeDenial(lowerText);
-
-          if (isAffirmative) {
+        // Reconhecimento verbal ou textual de aprovação para solicitações pendentes
+        const pendingReq = getPendingTerminalRequest();
+        if (pendingReq) {
+          const decision = interpretApprovalSpeech(lowerText, pendingReq.riskLevel);
+          if (decision === 'approve') {
             console.log(`[Terminal] Comando aprovado por voz/texto: "${text}"`);
-            const approvalId = this.pendingTerminalApprovalId;
-            this.pendingTerminalApprovalId = null;
-            toolEvents.emit(`terminal_approval_response_${approvalId}`, { approved: true });
-            this.broadcastToClients({
-              type: 'TERMINAL_APPROVAL_STATUS_UPDATE',
-              id: approvalId,
-              approved: true,
+            const remember = wantsRemember(lowerText);
+            const res = await resolveTerminalApproval(pendingReq.id, { approved: true, remember }, 'voice');
+            this.sendToClient(ws, {
+              type: 'ASSISTANT_RESPONSE',
+              text: res?.success
+                ? `Comando "${res.comando}" executado com sucesso.${res.output ? "\n" + res.output.slice(0, 500) : ""}`
+                : `O comando falhou: ${res?.message || res?.error || "erro desconhecido"}`,
+              routeType: 'DIRECT_INTENT',
             });
-            return; // Consume turn
+            return;
           }
 
-          if (isNegative) {
+          if (decision === 'deny') {
             console.log(`[Terminal] Comando negado por voz/texto: "${text}"`);
-            const approvalId = this.pendingTerminalApprovalId;
-            this.pendingTerminalApprovalId = null;
-            toolEvents.emit(`terminal_approval_response_${approvalId}`, { approved: false });
-            this.broadcastToClients({
-              type: 'TERMINAL_APPROVAL_STATUS_UPDATE',
-              id: approvalId,
-              approved: false,
+            await resolveTerminalApproval(pendingReq.id, { approved: false }, 'voice');
+            this.sendToClient(ws, {
+              type: 'ASSISTANT_RESPONSE',
+              text: 'Entendido. O comando de terminal foi cancelado.',
+              routeType: 'DIRECT_INTENT',
             });
-            return; // Consume turn
+            return;
+          }
+
+          if (decision === 'needs_strong') {
+            this.sendToClient(ws, {
+              type: 'ASSISTANT_RESPONSE',
+              text: 'Este comando é de alto risco. Diga explicitamente "confirmo" ou "autorizo" para que eu possa executá-lo.',
+              routeType: 'DIRECT_INTENT',
+            });
+            return;
           }
         }
 
@@ -661,6 +725,35 @@ export class JasperWebSocketServer {
       const { sttHandler } = await import('../voice/stt.js');
       const sttRes = await sttHandler.transcribeAudio(audioBase64);
       const commandText = sttRes.text || 'JASPER, que horas são?';
+
+      registerUserSpeech();
+      appendUserTranscript(commandText);
+
+      const pendingReq = getPendingTerminalRequest();
+      if (pendingReq) {
+        const decision = interpretApprovalSpeech(commandText, pendingReq.riskLevel);
+        if (decision === 'approve') {
+          const remember = wantsRemember(commandText);
+          const res = await resolveTerminalApproval(pendingReq.id, { approved: true, remember }, 'voice');
+          this.sendToClient(ws, {
+            type: 'ASSISTANT_RESPONSE',
+            text: res?.success
+              ? `Comando "${res.comando}" executado com sucesso.${res.output ? "\n" + res.output.slice(0, 500) : ""}`
+              : `O comando falhou: ${res?.message || res?.error || "erro desconhecido"}`,
+            routeType: 'DIRECT_INTENT',
+          });
+          return;
+        }
+        if (decision === 'deny') {
+          await resolveTerminalApproval(pendingReq.id, { approved: false }, 'voice');
+          this.sendToClient(ws, {
+            type: 'ASSISTANT_RESPONSE',
+            text: 'Entendido. O comando de terminal foi cancelado.',
+            routeType: 'DIRECT_INTENT',
+          });
+          return;
+        }
+      }
 
       if (this.geminiLive && this.geminiLive.isLiveConnected()) {
         console.log(`[WebSocket] Roteando Blob de áudio transcrito para Gemini Live: "${commandText}"`);

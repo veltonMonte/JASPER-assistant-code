@@ -1146,10 +1146,19 @@ const TerminalApprovalCard: React.FC<{
         </>
       ) : (
         <div className="terminal-approval-resolved-status">
-          {status === 'approved' && <span className="status-badge approved"><Check size={14} /> Permitido ✓</span>}
-          {status === 'edited' && <span className="status-badge edited"><Edit3 size={14} /> Permitido com Alteração ✎</span>}
-          {status === 'denied' && <span className="status-badge denied"><X size={14} /> Negado ✕</span>}
-          {msg.remember && <span className="status-badge remembered"><ShieldCheck size={14} /> Salvo na Whitelist 🛡️</span>}
+          <div style={{ display: "flex", gap: "8px", flexWrap: "wrap", alignItems: "center" }}>
+            {status === 'approved' && <span className="status-badge approved"><Check size={14} /> Permitido ✓</span>}
+            {status === 'edited' && <span className="status-badge edited"><Edit3 size={14} /> Permitido com Alteração ✎</span>}
+            {status === 'denied' && <span className="status-badge denied"><X size={14} /> Negado ✕</span>}
+            {msg.remember && <span className="status-badge remembered"><ShieldCheck size={14} /> Salvo na Whitelist 🛡️</span>}
+          </div>
+          {(msg.output || msg.error) && (
+            <div className="terminal-approval-output" style={{ marginTop: "10px", background: "rgba(0,0,0,0.6)", border: "1px solid rgba(255,255,255,0.08)", padding: "10px 12px", borderRadius: "6px", fontSize: "12px", fontFamily: "'JetBrains Mono', monospace", maxHeight: "180px", overflowY: "auto" }}>
+              <pre style={{ margin: 0, whiteSpace: "pre-wrap", color: msg.error ? "#f87171" : "#a7f3d0" }}>
+                {msg.output || msg.error}
+              </pre>
+            </div>
+          )}
         </div>
       )}
     </div>

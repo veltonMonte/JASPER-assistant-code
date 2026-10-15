@@ -95,42 +95,50 @@ function isThinkingLine(line: string): boolean {
 }
 
 function cleanTextMonologue(text: string): string {
-  if (!text) return '';
-  let cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, '');
-  
-  // Remove markdown blocks that are leaked tool calls or raw arguments
-  cleaned = cleaned.replace(/```[a-z]*\n[\s\S]*?\n```/gi, (match) => {
-    if (match.includes('pesquisar_web') || match.includes('acessar_site') || match.includes('ligar_pc') || match.includes('renderizar_grafico') || match.includes('renderizar_tabela')) {
-      return '';
-    }
-    if (match.match(/```[a-z]*\n\s*"[^"]+"\s*\n```/)) {
-        return '';
-    }
-    return match;
-  });
+  if (!text) return "";
+  let cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, "");
 
-  const lines = cleaned.split('\n');
-  const finalLines = [];
-  
+  // Strip ONLY leaked internal tool call JSONs (e.g. ```json \n {"tool": "pesquisar_web"} \n ```)
+  // NEVER strip recharts, table, images, video, bash or genuine code blocks!
+  cleaned = cleaned.replace(/```(?:json)?\n\s*\{\s*"(?:tool|name)"\s*:\s*"(?:pesquisar_web|acessar_site|ligar_pc|executar_terminal)"[\s\S]*?\}\s*\n```/gi, "");
+  cleaned = cleaned.replace(/```[a-z]*\n\s*"[^"]+"\s*\n```/g, "");
+
+  const lines = cleaned.split("\n");
+  const finalLines: string[] = [];
+  let inCodeBlock = false;
+
   const englishCommon = new Set([
-    'the', 'be', 'to', 'of', 'and', 'a', 'in', 'that', 'have', 'i', 'it', 'for', 'not', 'on', 'with', 'he', 'as', 'you', 'do', 'at',
-    'this', 'but', 'his', 'by', 'from', 'they', 'we', 'say', 'her', 'she', 'or', 'an', 'will', 'my', 'one', 'all', 'would', 'there',
-    'their', 'what', 'so', 'up', 'out', 'if', 'about', 'who', 'get', 'which', 'go', 'me', 'when', 'make', 'can', 'like', 'time', 'no',
-    'just', 'him', 'know', 'take', 'people', 'into', 'year', 'your', 'good', 'some', 'could', 'them', 'see', 'other', 'than', 'then',
-    'now', 'look', 'only', 'come', 'its', 'over', 'think', 'also', 'back', 'after', 'use', 'two', 'how', 'our', 'work', 'first',
-    'well', 'way', 'even', 'new', 'want', 'because', 'any', 'these', 'give', 'day', 'most', 'us', 'user', 'request', 'focus',
-    'action', 'context', 'specifics', 'topic', 'scope', 'clarifying', 'tool', 'task', 'query', 'string', 'details', 'choice', 'optimal',
-    'built', 'combining', 'execute', 'uncover', 'information', 'hopefully', 'confirming', 'denying', 'specific', 'release', 'date', 'assumption',
-    'refining', 'parameters', 'zeroing', 'movie', 'given', 'initial', 'refined', 'recognizing', 'data', 'imminent', 'check', 'pinpointing', 'pre-sale', 'determined'
+    "the", "be", "to", "of", "and", "a", "in", "that", "have", "i", "it", "for", "not", "on", "with", "he", "as", "you", "do", "at",
+    "this", "but", "his", "by", "from", "they", "we", "say", "her", "she", "or", "an", "will", "my", "one", "all", "would", "there",
+    "their", "what", "so", "up", "out", "if", "about", "who", "get", "which", "go", "me", "when", "make", "can", "like", "time", "no",
+    "just", "him", "know", "take", "people", "into", "year", "your", "good", "some", "could", "them", "see", "other", "than", "then",
+    "now", "look", "only", "come", "its", "over", "think", "also", "back", "after", "use", "two", "how", "our", "work", "first",
+    "well", "way", "even", "new", "want", "because", "any", "these", "give", "day", "most", "us", "user", "request", "focus",
+    "action", "context", "specifics", "topic", "scope", "clarifying", "tool", "task", "query", "string", "details", "choice", "optimal",
+    "built", "combining", "execute", "uncover", "information", "hopefully", "confirming", "denying", "specific", "release", "date", "assumption",
+    "refining", "parameters", "zeroing", "movie", "given", "initial", "refined", "recognizing", "data", "imminent", "check", "pinpointing", "pre-sale", "determined"
   ]);
 
   for (const line of lines) {
-    const l = line.toLowerCase().trim();
+    const trimmed = line.trim();
+    if (trimmed.startsWith("```")) {
+      inCodeBlock = !inCodeBlock;
+      finalLines.push(line);
+      continue;
+    }
+
+    // Inside ANY code block (recharts, table, code, bash, etc.), PRESERVE every single line untouched!
+    if (inCodeBlock) {
+      finalLines.push(line);
+      continue;
+    }
+
+    const l = trimmed.toLowerCase();
     if (!l) {
       finalLines.push(line);
       continue;
     }
-    
+
     // Ignore stray punctuation left over from removed markdown
     if (l.length < 3 && l.match(/^[. ,!?;]+$/)) continue;
 
@@ -141,19 +149,19 @@ function cleanTextMonologue(text: string): string {
       if (englishCommon.has(w)) engCount++;
     }
 
-    // If it's heavily English, it's a leaked thought, skip it
+    // If it is heavily English, it is a leaked thought, skip it
     if (engCount >= 2 && engCount >= words.length * 0.3) {
       continue;
     }
-    
-    if (l.includes('tool is') || l.includes("i've determined") || l.includes('now, i will')) {
-        continue;
+
+    if (l.includes("tool is") || l.includes("i've determined") || l.includes("now, i will")) {
+      continue;
     }
 
     finalLines.push(line);
   }
 
-  return finalLines.join('\n').trimStart();
+  return finalLines.join("\n").trimStart();
 }
 
 function base64ToFloat32Array(base64: string): Float32Array {

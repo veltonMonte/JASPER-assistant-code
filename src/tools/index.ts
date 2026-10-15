@@ -389,6 +389,8 @@ export async function executeToolByName(name: string, args: Record<string, any> 
         let finalConfig = args.chartConfig;
         if (typeof finalConfig === 'object') {
           finalConfig = JSON.stringify(finalConfig);
+        } else if (typeof finalConfig === 'string') {
+          finalConfig = finalConfig.replace(/^```[a-zA-Z0-9_-]*\s*/, '').replace(/\s*```$/, '').trim();
         } else if (!finalConfig && (args.data || args.series)) {
           const chartType = args.chartType || args.type || 'bar';
           const data = args.data || [];
@@ -415,6 +417,8 @@ export async function executeToolByName(name: string, args: Record<string, any> 
         let finalConfig = args.tableConfig;
         if (typeof finalConfig === 'object') {
           finalConfig = JSON.stringify(finalConfig);
+        } else if (typeof finalConfig === 'string') {
+          finalConfig = finalConfig.replace(/^```[a-zA-Z0-9_-]*\s*/, '').replace(/\s*```$/, '').trim();
         } else if (!finalConfig && (args.columns || args.rows || args.data)) {
           finalConfig = JSON.stringify({
             title: args.title || 'Tabela de Dados',

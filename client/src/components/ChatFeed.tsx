@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState, useMemo } from 'react';
+import React, { useEffect, useRef, useState, useMemo, useId } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import {
@@ -68,10 +68,12 @@ const CustomXAxisTick: React.FC<any> = ({ x, y, payload, shouldRotate }) => {
   const rawVal = String(payload.value);
   const maxChars = shouldRotate ? 14 : 10;
   const displayVal = rawVal.length > maxChars ? rawVal.slice(0, maxChars - 1) + '…' : rawVal;
+  const safeX = typeof x === 'number' && !isNaN(x) ? x : 0;
+  const safeY = typeof y === 'number' && !isNaN(y) ? y : 0;
 
   if (shouldRotate) {
     return (
-      <g transform={`translate(${x},${y})`}>
+      <g transform={`translate(${safeX},${safeY})`}>
         <title>{rawVal}</title>
         <text
           x={0}
@@ -91,7 +93,7 @@ const CustomXAxisTick: React.FC<any> = ({ x, y, payload, shouldRotate }) => {
   }
 
   return (
-    <g transform={`translate(${x},${y})`}>
+    <g transform={`translate(${safeX},${safeY})`}>
       <title>{rawVal}</title>
       <text
         x={0}
@@ -117,7 +119,13 @@ const CustomTooltip: React.FC<any> = ({ active, payload, label }) => {
         </div>
         <div className="tooltip-body">
           {payload.map((entry: any, idx: number) => {
-            const color = entry.color || entry.fill || '#06b6d4';
+            let color = entry.color || entry.stroke || '#06b6d4';
+            if (typeof color === 'string' && color.startsWith('url(' )) {
+              color = entry.payload?.fill || '#06b6d4';
+              if (typeof color === 'string' && color.startsWith('url(' )) {
+                color = '#06b6d4';
+              }
+            }
             const val = entry.value;
             const formattedVal = typeof val === 'number' ? val.toLocaleString('pt-BR') : val;
             return (
@@ -379,437 +387,550 @@ const InteractiveTable: React.FC<InteractiveTableProps> = ({
   );
 };
 
-const ChartComponent: React.FC<{ jsonStr: string }> = ({ jsonStr }) => {
-  const [copied, setCopied] = useState(false);
-  const [chartTypeState, setChartTypeState] = useState<'bar' | 'bar-horizontal' | 'line' | 'area' | 'pie' | 'table'>('bar');
-  const [isFullscreen, setIsFullscreen] = useState(false);
+function parseChartConfig(raw: string): any | null {
+  if (!raw || typeof raw !== "string") return null;
+  let clean = raw.trim();
 
+  // Strip code fences if present (e.g. ```json ... ``` or ```recharts ... ```)
+  clean = clean.replace(/^```[a-zA-Z0-9_-]*\s*/, "").replace(/\s*```$/, "").trim();
+
+  // 1. Direct parse
   try {
-    const config = JSON.parse(jsonStr);
-    const { type = 'bar', data = [], xKey = 'name', series = [], title = 'Visualização de Dados' } = config;
-
-    const avgLen = data.length > 0 ? (data.reduce((acc: number, d: any) => acc + String(d[xKey] || '').length, 0) / data.length) : 0;
-    const maxLen = data.length > 0 ? Math.max(...data.map((d: any) => String(d[xKey] || '').length)) : 0;
-    const shouldRotate = data.length > 3 && (maxLen > 6 || avgLen > 7);
-
-    useEffect(() => {
-      if (type === 'line' || type === 'area' || type === 'pie') {
-        setChartTypeState(type);
-      } else if (type === 'bar' || type === 'horizontal' || type === 'bar-horizontal') {
-        if (data.length >= 6 || avgLen > 9) {
-          setChartTypeState('bar-horizontal');
-        } else {
-          setChartTypeState('bar');
+    return JSON.parse(clean);
+  } catch (e1) {
+    // 2. Extract JSON object substring
+    const match = clean.match(/\{[\s\S]*\}/);
+    if (match) {
+      try {
+        return JSON.parse(match[0]);
+      } catch (e2) {
+        // 3. Clean trailing commas & unquoted keys
+        try {
+          const relaxed = match[0]
+            .replace(/,\s*([\]}])/g, "$1")
+            .replace(/(['"])?([a-zA-Z0-9_]+)(['"])?\s*:/g, '"$2":')
+            .replace(/'/g, '"');
+          return JSON.parse(relaxed);
+        } catch (e3) {
+          try {
+            const fn = new Function(`return (${match[0]});`);
+            const res = fn();
+            if (res && typeof res === "object") return res;
+          } catch (e4) {}
         }
       }
-    }, [type, data.length, avgLen]);
-
-    if (!data || !Array.isArray(data) || data.length === 0) {
-      return <div className="chart-error-card">Nenhum dado numérico disponível para o gráfico.</div>;
     }
+  }
+  return null;
+}
 
-    const finalSeries = Array.isArray(series) && series.length > 0 ? series : [
-      { dataKey: Object.keys(data[0]).find(k => k !== xKey && typeof data[0][k] === 'number') || 'valor', name: 'Valor', color: '#06b6d4' }
-    ];
+const ChartComponent: React.FC<{ jsonStr: string }> = React.memo(({ jsonStr }) => {
+  const [copied, setCopied] = useState(false);
+  const [userSelectedType, setUserSelectedType] = useState<'bar' | 'bar-horizontal' | 'line' | 'area' | 'pie' | 'table' | null>(null);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
-    const primaryKey = finalSeries[0]?.dataKey;
-    let leaderItem: any = null;
-    let minItem: any = null;
-    let sumVal = 0;
-    let numCount = 0;
+  // Stable unique ID for SVG gradient defs to avoid collisions between multiple charts in DOM
+  const rawId = useId();
+  const chartInstanceId = useMemo(() => "ch_" + rawId.replace(/[^a-zA-Z0-9_-]/g, "_"), [rawId]);
 
-    data.forEach((d: any) => {
-      const val = Number(d[primaryKey]);
-      if (!isNaN(val)) {
-        sumVal += val;
-        numCount++;
-        if (!leaderItem || val > Number(leaderItem[primaryKey])) leaderItem = d;
-        if (!minItem || val < Number(minItem[primaryKey])) minItem = d;
+  const config = useMemo(() => parseChartConfig(jsonStr), [jsonStr]);
+
+  const rawData = useMemo(() => {
+    return (config && Array.isArray(config.data)) ? config.data : [];
+  }, [config]);
+
+  const title = config?.title || "Visualização de Dados";
+  const rawType = config?.type || "bar";
+
+  const xKey = useMemo(() => {
+    if (config?.xKey) return config.xKey;
+    if (rawData.length > 0 && rawData[0]) {
+      const keys = Object.keys(rawData[0]);
+      const stringKey = keys.find(k => typeof rawData[0][k] === "string");
+      return stringKey || keys[0] || "name";
+    }
+    return "name";
+  }, [config?.xKey, rawData]);
+
+  // Sanitize data: clean string numbers (e.g. "45%", "45,5", "1.200") to pure numbers
+  const sanitizedData = useMemo(() => {
+    if (!rawData.length) return [];
+    return rawData.map((d: any) => {
+      if (!d || typeof d !== "object") return {};
+      const item: Record<string, any> = { ...d };
+      for (const k of Object.keys(item)) {
+        if (k !== xKey) {
+          const val = item[k];
+          if (typeof val === "string") {
+            const cleanStr = val.replace(/%/g, "").replace(/\$/g, "").replace(/,/g, ".").trim();
+            const num = parseFloat(cleanStr);
+            if (!isNaN(num) && isFinite(num) && !val.match(/[a-zA-Z]/)) {
+              item[k] = num;
+            }
+          }
+        }
       }
+      return item;
     });
+  }, [rawData, xKey]);
 
-    const avgVal = numCount > 0 ? (sumVal / numCount) : 0;
-
-    const handleCopyJSON = () => {
-      navigator.clipboard.writeText(jsonStr);
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    };
-
-    const handleExportCSV = () => {
-      const headers = [xKey, ...finalSeries.map((s: any) => s.dataKey)].join(',');
-      const rows = data.map((d: any) => [
-        `"${String(d[xKey] || '').replace(/"/g, '""')}"`,
-        ...finalSeries.map((s: any) => d[s.dataKey] ?? '')
-      ].join(',')).join("\n");
-      const csvContent = `${headers}\n${rows}`;
-      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      link.download = `${title.replace(/\s+/g, '_').toLowerCase()}.csv`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    };
-
-    const renderChart = () => {
-      const activeType = chartTypeState;
-
-      if (activeType === 'table') {
-        const tableCols = [
-          { key: xKey, label: xKey.toUpperCase() },
-          ...finalSeries.map((s: any) => ({ key: s.dataKey, label: s.name || s.dataKey }))
-        ];
-        return (
-          <div style={{ marginTop: '8px' }}>
-            <InteractiveTable
-              title={title}
-              columns={tableCols}
-              rows={data}
-              isEmbedded={true}
-            />
-          </div>
-        );
+  // Detect series
+  const finalSeries = useMemo(() => {
+    if (config && Array.isArray(config.series) && config.series.length > 0) {
+      return config.series;
+    }
+    if (sanitizedData.length > 0 && sanitizedData[0]) {
+      const numKeys = Object.keys(sanitizedData[0]).filter(k => k !== xKey && typeof sanitizedData[0][k] === "number");
+      if (numKeys.length > 0) {
+        return numKeys.map((k, idx) => ({
+          dataKey: k,
+          name: k.charAt(0).toUpperCase() + k.slice(1).replace(/_/g, " "),
+          color: DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length]
+        }));
       }
+    }
+    return [{ dataKey: "valor", name: "Valor", color: "#06b6d4" }];
+  }, [config?.series, sanitizedData, xKey]);
 
-      const chartHeight = activeType === 'bar-horizontal' 
-        ? Math.max(300, Math.min(520, data.length * 36 + 60))
-        : 330;
+  // Calculate default chart type synchronously (no two-step render / no useEffect flip)
+  const defaultType = useMemo<'bar' | 'bar-horizontal' | 'line' | 'area' | 'pie' | 'table'>(() => {
+    if (rawType === "line" || rawType === "area" || rawType === "pie" || rawType === "table") {
+      return rawType;
+    }
+    const avgLen = sanitizedData.length > 0
+      ? (sanitizedData.reduce((acc: number, d: any) => acc + String(d[xKey] || "").length, 0) / sanitizedData.length)
+      : 0;
+    if (sanitizedData.length >= 6 || avgLen > 9) {
+      return "bar-horizontal";
+    }
+    return "bar";
+  }, [rawType, sanitizedData, xKey]);
 
-      return (
-        <ResponsiveContainer width="100%" height={chartHeight}>
-          {activeType === 'line' ? (
-            <LineChart data={data} margin={{ top: 20, right: 35, left: 10, bottom: shouldRotate ? 45 : 20 }}>
-              <defs>
-                {finalSeries.map((s: any, idx: number) => {
-                  const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
-                  return (
-                    <linearGradient key={`lineGrad-${idx}`} id={`lineGrad-${idx}`} x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={color} stopOpacity={0.4} />
-                      <stop offset="95%" stopColor={color} stopOpacity={0.0} />
-                    </linearGradient>
-                  );
-                })}
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.06)" vertical={false} />
-              <XAxis
-                dataKey={xKey}
-                stroke="#64748b"
-                tick={<CustomXAxisTick shouldRotate={shouldRotate} />}
-                height={shouldRotate ? 65 : 30}
-                interval={0}
-                axisLine={{ stroke: 'rgba(255, 255, 255, 0.1)' }}
-                tickLine={false}
-              />
-              <YAxis stroke="#64748b" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
-              <Tooltip content={<CustomTooltip />} />
-              <Legend wrapperStyle={{ color: '#cbd5e1', paddingTop: '12px', fontSize: '12px' }} />
-              {finalSeries.map((s: any, idx: number) => {
-                const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
-                return (
-                  <Line
-                    key={s.dataKey}
-                    type="monotone"
-                    dataKey={s.dataKey}
-                    stroke={color}
-                    name={s.name || s.dataKey}
-                    strokeWidth={3}
-                    dot={{ r: 4, strokeWidth: 2, fill: '#0f172a', stroke: color }}
-                    activeDot={{ r: 7, strokeWidth: 2, fill: color, stroke: '#fff' }}
-                  />
-                );
-              })}
-            </LineChart>
-          ) : activeType === 'area' ? (
-            <AreaChart data={data} margin={{ top: 20, right: 35, left: 10, bottom: shouldRotate ? 45 : 20 }}>
-              <defs>
-                {finalSeries.map((s: any, idx: number) => {
-                  const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
-                  return (
-                    <linearGradient key={`areaGrad-${idx}`} id={`areaGrad-${idx}`} x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="5%" stopColor={color} stopOpacity={0.65} />
-                      <stop offset="95%" stopColor={color} stopOpacity={0.02} />
-                    </linearGradient>
-                  );
-                })}
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.06)" vertical={false} />
-              <XAxis
-                dataKey={xKey}
-                stroke="#64748b"
-                tick={<CustomXAxisTick shouldRotate={shouldRotate} />}
-                height={shouldRotate ? 65 : 30}
-                interval={0}
-                axisLine={{ stroke: 'rgba(255, 255, 255, 0.1)' }}
-                tickLine={false}
-              />
-              <YAxis stroke="#64748b" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
-              <Tooltip content={<CustomTooltip />} />
-              <Legend wrapperStyle={{ color: '#cbd5e1', paddingTop: '12px', fontSize: '12px' }} />
-              {finalSeries.map((s: any, idx: number) => {
-                const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
-                return (
-                  <Area
-                    key={s.dataKey}
-                    type="monotone"
-                    dataKey={s.dataKey}
-                    stroke={color}
-                    fill={`url(#areaGrad-${idx})`}
-                    name={s.name || s.dataKey}
-                    strokeWidth={2.5}
-                  />
-                );
-              })}
-            </AreaChart>
-          ) : activeType === 'bar-horizontal' ? (
-            <BarChart
-              layout="vertical"
-              data={data}
-              margin={{ top: 15, right: 45, left: 15, bottom: 15 }}
-            >
-              <defs>
-                {finalSeries.map((s: any, idx: number) => {
-                  const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
-                  return (
-                    <linearGradient key={`barHorizGrad-${idx}`} id={`barHorizGrad-${idx}`} x1="0" y1="0" x2="1" y2="0">
-                      <stop offset="0%" stopColor={color} stopOpacity={0.95} />
-                      <stop offset="100%" stopColor={color} stopOpacity={0.6} />
-                    </linearGradient>
-                  );
-                })}
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.06)" horizontal={false} />
-              <XAxis type="number" stroke="#64748b" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
-              <YAxis
-                type="category"
-                dataKey={xKey}
-                stroke="#64748b"
-                tick={{ fill: '#cbd5e1', fontSize: 11, fontWeight: 500 }}
-                width={130}
-                tickFormatter={(val) => {
-                  const s = String(val);
-                  return s.length > 18 ? s.slice(0, 16) + '…' : s;
-                }}
-                axisLine={{ stroke: 'rgba(255, 255, 255, 0.1)' }}
-                tickLine={false}
-              />
-              <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(255, 255, 255, 0.04)', radius: 6 }} />
-              <Legend wrapperStyle={{ color: '#cbd5e1', paddingTop: '10px', fontSize: '12px' }} />
-              {finalSeries.map((s: any, idx: number) => {
-                const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
-                return (
-                  <Bar
-                    key={s.dataKey}
-                    dataKey={s.dataKey}
-                    fill={`url(#barHorizGrad-${idx})`}
-                    stroke={color}
-                    strokeWidth={1}
-                    name={s.name || s.dataKey}
-                    radius={[0, 6, 6, 0]}
-                    maxBarSize={30}
-                  >
-                    <LabelList dataKey={s.dataKey} position="right" fill="#94a3b8" fontSize={10} fontWeight={600} />
-                  </Bar>
-                );
-              })}
-            </BarChart>
-          ) : activeType === 'pie' ? (
-            <PieChart margin={{ top: 15, right: 15, bottom: 15, left: 15 }}>
-              <Tooltip content={<CustomTooltip />} />
-              <Legend wrapperStyle={{ color: '#cbd5e1', paddingTop: '12px', fontSize: '12px' }} />
-              <Pie
-                data={data}
-                dataKey={finalSeries[0]?.dataKey || 'value'}
-                nameKey={xKey}
-                cx="50%"
-                cy="50%"
-                innerRadius={60}
-                outerRadius={100}
-                paddingAngle={3}
-                label={({ percent }: any) => `${(percent * 100).toFixed(0)}%`}
-                labelLine={false}
-              >
-                {data.map((_, index: number) => (
-                  <Cell
-                    key={`cell-${index}`}
-                    fill={DEFAULT_SERIES_COLORS[index % DEFAULT_SERIES_COLORS.length]}
-                    stroke="rgba(15, 23, 42, 0.8)"
-                    strokeWidth={2}
-                  />
-                ))}
-              </Pie>
-            </PieChart>
-          ) : (
-            <BarChart data={data} margin={{ top: 20, right: 35, left: 10, bottom: shouldRotate ? 45 : 20 }}>
-              <defs>
-                {finalSeries.map((s: any, idx: number) => {
-                  const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
-                  return (
-                    <linearGradient key={`barGrad-${idx}`} id={`barGrad-${idx}`} x1="0" y1="0" x2="0" y2="1">
-                      <stop offset="0%" stopColor={color} stopOpacity={0.95} />
-                      <stop offset="100%" stopColor={color} stopOpacity={0.5} />
-                    </linearGradient>
-                  );
-                })}
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.06)" vertical={false} />
-              <XAxis
-                dataKey={xKey}
-                stroke="#64748b"
-                tick={<CustomXAxisTick shouldRotate={shouldRotate} />}
-                height={shouldRotate ? 65 : 30}
-                interval={0}
-                axisLine={{ stroke: 'rgba(255, 255, 255, 0.1)' }}
-                tickLine={false}
-              />
-              <YAxis stroke="#64748b" tick={{ fill: '#94a3b8', fontSize: 11 }} axisLine={false} tickLine={false} />
-              <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(255, 255, 255, 0.04)', radius: 6 }} />
-              <Legend wrapperStyle={{ color: '#cbd5e1', paddingTop: '12px', fontSize: '12px' }} />
-              {finalSeries.map((s: any, idx: number) => {
-                const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
-                return (
-                  <Bar
-                    key={s.dataKey}
-                    dataKey={s.dataKey}
-                    fill={`url(#barGrad-${idx})`}
-                    stroke={color}
-                    strokeWidth={1}
-                    name={s.name || s.dataKey}
-                    radius={[6, 6, 0, 0]}
-                    maxBarSize={44}
-                  >
-                    <LabelList dataKey={s.dataKey} position="top" fill="#cbd5e1" fontSize={10} fontWeight={500} />
-                  </Bar>
-                );
-              })}
-            </BarChart>
-          )}
-        </ResponsiveContainer>
-      );
-    };
+  const activeType = userSelectedType || defaultType;
 
+  // Primary key for KPIs
+  const primaryKey = finalSeries[0]?.dataKey || "valor";
+  let leaderItem: any = null;
+  let minItem: any = null;
+  let sumVal = 0;
+  let numCount = 0;
+
+  sanitizedData.forEach((d: any) => {
+    const val = Number(d[primaryKey]);
+    if (!isNaN(val)) {
+      sumVal += val;
+      numCount++;
+      if (!leaderItem || val > Number(leaderItem[primaryKey])) leaderItem = d;
+      if (!minItem || val < Number(minItem[primaryKey])) minItem = d;
+    }
+  });
+
+  const avgVal = numCount > 0 ? (sumVal / numCount) : 0;
+  const avgLen = sanitizedData.length > 0 ? (sanitizedData.reduce((acc: number, d: any) => acc + String(d[xKey] || "").length, 0) / sanitizedData.length) : 0;
+  const maxLen = sanitizedData.length > 0 ? Math.max(...sanitizedData.map((d: any) => String(d[xKey] || "").length)) : 0;
+  const shouldRotate = sanitizedData.length > 3 && (maxLen > 6 || avgLen > 7);
+
+  const handleCopyJSON = () => {
+    navigator.clipboard.writeText(jsonStr);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleExportCSV = () => {
+    const headers = [xKey, ...finalSeries.map((s: any) => s.dataKey)].join(",");
+    const rows = sanitizedData.map((d: any) => [
+      `"${String(d[xKey] || "").replace(/"/g, '""')}"`,
+      ...finalSeries.map((s: any) => d[s.dataKey] ?? "")
+    ].join(",")).join("\n");
+    const csvContent = `${headers}\n${rows}`;
+    const blob = new Blob([csvContent], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = `${title.replace(/\s+/g, "_").toLowerCase()}.csv`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  if (!config) {
     return (
-      <div className={`recharts-glass-card ${isFullscreen ? 'chart-card-fullscreen' : ''}`}>
-        <div className="recharts-card-header">
-          <div className="header-left">
-            <div className="chart-sparkle-icon">
-              <TrendingUp size={16} />
-            </div>
-            <div className="chart-header-info">
-              <h4 className="chart-title">{title}</h4>
-              <div className="chart-tags">
-                <span className="chart-type-pill">{chartTypeState.replace('-', ' ').toUpperCase()}</span>
-                <span className="chart-count-pill">{data.length} itens</span>
-              </div>
-            </div>
-          </div>
-
-          <div className="header-right">
-            <div className="chart-type-toggle">
-              <button
-                className={`btn-toggle-type ${chartTypeState === 'bar-horizontal' ? 'active' : ''}`}
-                onClick={() => setChartTypeState('bar-horizontal')}
-                title="Barras Horizontais (Ideal para rankings e nomes longos)"
-              >
-                <LayoutList size={13} />
-              </button>
-              <button
-                className={`btn-toggle-type ${chartTypeState === 'bar' ? 'active' : ''}`}
-                onClick={() => setChartTypeState('bar')}
-                title="Barras Verticais"
-              >
-                <BarChart2 size={13} />
-              </button>
-              <button
-                className={`btn-toggle-type ${chartTypeState === 'line' ? 'active' : ''}`}
-                onClick={() => setChartTypeState('line')}
-                title="Linhas"
-              >
-                <TrendingUp size={13} />
-              </button>
-              <button
-                className={`btn-toggle-type ${chartTypeState === 'area' ? 'active' : ''}`}
-                onClick={() => setChartTypeState('area')}
-                title="Área"
-              >
-                <Activity size={13} />
-              </button>
-              <button
-                className={`btn-toggle-type ${chartTypeState === 'pie' ? 'active' : ''}`}
-                onClick={() => setChartTypeState('pie')}
-                title="Donut / Pizza"
-              >
-                <PieIcon size={13} />
-              </button>
-              <button
-                className={`btn-toggle-type ${chartTypeState === 'table' ? 'active' : ''}`}
-                onClick={() => setChartTypeState('table')}
-                title="Visualizar em Tabela"
-              >
-                <TableIcon size={13} />
-              </button>
-            </div>
-
-            <button onClick={handleExportCSV} className="btn-copy-chart-json" title="Exportar dados como CSV">
-              <Download size={13} />
-              <span>CSV</span>
-            </button>
-
-            <button onClick={handleCopyJSON} className="btn-copy-chart-json" title="Copiar JSON do Gráfico">
-              {copied ? <Check size={13} style={{ color: '#10b981' }} /> : <Copy size={13} />}
-              <span>{copied ? 'Copiado' : 'JSON'}</span>
-            </button>
-
-            <button
-              onClick={() => setIsFullscreen(!isFullscreen)}
-              className="btn-copy-chart-json"
-              title={isFullscreen ? 'Restaurar tamanho' : 'Maximizar gráfico'}
-            >
-              {isFullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
-            </button>
-          </div>
-        </div>
-
-        {/* KPI Mini-Ribbon */}
-        {numCount > 0 && chartTypeState !== 'table' && (
-          <div className="chart-kpi-ribbon">
-            {leaderItem && (
-              <div className="kpi-card leader">
-                <span className="kpi-label">🏆 Maior</span>
-                <span className="kpi-val" title={String(leaderItem[xKey])}>
-                  {String(leaderItem[xKey]).length > 15 ? String(leaderItem[xKey]).slice(0, 14) + '…' : leaderItem[xKey]}: <strong>{Number(leaderItem[primaryKey]).toLocaleString('pt-BR')}</strong>
-                </span>
-              </div>
-            )}
-            {minItem && (
-              <div className="kpi-card min">
-                <span className="kpi-label">📉 Menor</span>
-                <span className="kpi-val" title={String(minItem[xKey])}>
-                  {String(minItem[xKey]).length > 15 ? String(minItem[xKey]).slice(0, 14) + '…' : minItem[xKey]}: <strong>{Number(minItem[primaryKey]).toLocaleString('pt-BR')}</strong>
-                </span>
-              </div>
-            )}
-            <div className="kpi-card avg">
-              <span className="kpi-label">📊 Média</span>
-              <span className="kpi-val"><strong>{avgVal.toLocaleString('pt-BR', { maximumFractionDigits: 1 })}</strong></span>
-            </div>
-            <div className="kpi-card count">
-              <span className="kpi-label">🔢 Total</span>
-              <span className="kpi-val"><strong>{data.length}</strong> itens</span>
-            </div>
-          </div>
-        )}
-
-        <div className="recharts-card-body">
-          {renderChart()}
-        </div>
+      <div className="chart-error-card" style={{ display: "flex", alignItems: "center", gap: "8px", padding: "16px", background: "rgba(239, 68, 68, 0.1)", border: "1px solid rgba(239, 68, 68, 0.25)", borderRadius: "12px", color: "#f87171" }}>
+        <AlertCircle size={16} />
+        <span>Erro ao renderizar gráfico: JSON de configuração inválido.</span>
       </div>
     );
-  } catch (err) {
-    return <div className="chart-error-card">Erro ao renderizar gráfico: JSON de configuração inválido.</div>;
   }
-};
+
+  if (sanitizedData.length === 0) {
+    return (
+      <div className="chart-error-card" style={{ display: "flex", alignItems: "center", gap: "8px", padding: "16px", background: "rgba(234, 179, 8, 0.1)", border: "1px solid rgba(234, 179, 8, 0.25)", borderRadius: "12px", color: "#facc15" }}>
+        <AlertCircle size={16} />
+        <span>Nenhum dado numérico disponível para o gráfico.</span>
+      </div>
+    );
+  }
+
+  const chartHeight = isFullscreen
+    ? 500
+    : (activeType === "bar-horizontal"
+        ? Math.max(300, Math.min(520, sanitizedData.length * 36 + 60))
+        : 330);
+
+  const renderChart = () => {
+    if (activeType === "table") {
+      const tableCols = [
+        { key: xKey, label: xKey.toUpperCase() },
+        ...finalSeries.map((s: any) => ({ key: s.dataKey, label: s.name || s.dataKey }))
+      ];
+      return (
+        <div style={{ marginTop: "8px" }}>
+          <InteractiveTable
+            title={title}
+            columns={tableCols}
+            rows={sanitizedData}
+            isEmbedded={true}
+          />
+        </div>
+      );
+    }
+
+    return (
+      <ResponsiveContainer width="100%" height={chartHeight} minWidth={0} debounce={50}>
+        {activeType === "line" ? (
+          <LineChart data={sanitizedData} margin={{ top: 20, right: 35, left: 10, bottom: shouldRotate ? 45 : 20 }}>
+            <defs>
+              {finalSeries.map((s: any, idx: number) => {
+                const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
+                return (
+                  <linearGradient key={`${chartInstanceId}-lineGrad-${idx}`} id={`${chartInstanceId}-lineGrad-${idx}`} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={color} stopOpacity={0.4} />
+                    <stop offset="95%" stopColor={color} stopOpacity={0.0} />
+                  </linearGradient>
+                );
+              })}
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.06)" vertical={false} />
+            <XAxis
+              dataKey={xKey}
+              stroke="#64748b"
+              tick={<CustomXAxisTick shouldRotate={shouldRotate} />}
+              height={shouldRotate ? 65 : 30}
+              interval={0}
+              axisLine={{ stroke: "rgba(255, 255, 255, 0.1)" }}
+              tickLine={false}
+            />
+            <YAxis stroke="#64748b" tick={{ fill: "#94a3b8", fontSize: 11 }} axisLine={false} tickLine={false} />
+            <Tooltip content={<CustomTooltip />} />
+            <Legend wrapperStyle={{ color: "#cbd5e1", paddingTop: "12px", fontSize: "12px" }} />
+            {finalSeries.map((s: any, idx: number) => {
+              const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
+              return (
+                <Line
+                  key={s.dataKey}
+                  type="monotone"
+                  dataKey={s.dataKey}
+                  stroke={color}
+                  name={s.name || s.dataKey}
+                  strokeWidth={3}
+                  dot={{ r: 4, strokeWidth: 2, fill: "#0f172a", stroke: color }}
+                  activeDot={{ r: 7, strokeWidth: 2, fill: color, stroke: "#fff" }}
+                  isAnimationActive={false}
+                />
+              );
+            })}
+          </LineChart>
+        ) : activeType === "area" ? (
+          <AreaChart data={sanitizedData} margin={{ top: 20, right: 35, left: 10, bottom: shouldRotate ? 45 : 20 }}>
+            <defs>
+              {finalSeries.map((s: any, idx: number) => {
+                const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
+                return (
+                  <linearGradient key={`${chartInstanceId}-areaGrad-${idx}`} id={`${chartInstanceId}-areaGrad-${idx}`} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={color} stopOpacity={0.65} />
+                    <stop offset="95%" stopColor={color} stopOpacity={0.02} />
+                  </linearGradient>
+                );
+              })}
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.06)" vertical={false} />
+            <XAxis
+              dataKey={xKey}
+              stroke="#64748b"
+              tick={<CustomXAxisTick shouldRotate={shouldRotate} />}
+              height={shouldRotate ? 65 : 30}
+              interval={0}
+              axisLine={{ stroke: "rgba(255, 255, 255, 0.1)" }}
+              tickLine={false}
+            />
+            <YAxis stroke="#64748b" tick={{ fill: "#94a3b8", fontSize: 11 }} axisLine={false} tickLine={false} />
+            <Tooltip content={<CustomTooltip />} />
+            <Legend wrapperStyle={{ color: "#cbd5e1", paddingTop: "12px", fontSize: "12px" }} />
+            {finalSeries.map((s: any, idx: number) => {
+              const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
+              return (
+                <Area
+                  key={s.dataKey}
+                  type="monotone"
+                  dataKey={s.dataKey}
+                  stroke={color}
+                  fill={`url(#${chartInstanceId}-areaGrad-${idx})`}
+                  name={s.name || s.dataKey}
+                  strokeWidth={2.5}
+                  isAnimationActive={false}
+                />
+              );
+            })}
+          </AreaChart>
+        ) : activeType === "bar-horizontal" ? (
+          <BarChart
+            layout="vertical"
+            data={sanitizedData}
+            margin={{ top: 15, right: 45, left: 15, bottom: 15 }}
+          >
+            <defs>
+              {finalSeries.map((s: any, idx: number) => {
+                const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
+                return (
+                  <linearGradient key={`${chartInstanceId}-barHorizGrad-${idx}`} id={`${chartInstanceId}-barHorizGrad-${idx}`} x1="0" y1="0" x2="1" y2="0">
+                    <stop offset="0%" stopColor={color} stopOpacity={0.95} />
+                    <stop offset="100%" stopColor={color} stopOpacity={0.6} />
+                  </linearGradient>
+                );
+              })}
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.06)" horizontal={false} />
+            <XAxis type="number" stroke="#64748b" tick={{ fill: "#94a3b8", fontSize: 11 }} axisLine={false} tickLine={false} />
+            <YAxis
+              type="category"
+              dataKey={xKey}
+              stroke="#64748b"
+              tick={{ fill: "#cbd5e1", fontSize: 11, fontWeight: 500 }}
+              width={130}
+              tickFormatter={(val) => {
+                const s = String(val);
+                return s.length > 18 ? s.slice(0, 16) + "…" : s;
+              }}
+              axisLine={{ stroke: "rgba(255, 255, 255, 0.1)" }}
+              tickLine={false}
+            />
+            <Tooltip content={<CustomTooltip />} cursor={{ fill: "rgba(255, 255, 255, 0.04)", radius: 6 }} />
+            <Legend wrapperStyle={{ color: "#cbd5e1", paddingTop: "10px", fontSize: "12px" }} />
+            {finalSeries.map((s: any, idx: number) => {
+              const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
+              return (
+                <Bar
+                  key={s.dataKey}
+                  dataKey={s.dataKey}
+                  fill={`url(#${chartInstanceId}-barHorizGrad-${idx})`}
+                  stroke={color}
+                  strokeWidth={1}
+                  name={s.name || s.dataKey}
+                  radius={[0, 6, 6, 0]}
+                  maxBarSize={30}
+                  isAnimationActive={false}
+                >
+                  <LabelList dataKey={s.dataKey} position="right" fill="#94a3b8" fontSize={10} fontWeight={600} />
+                </Bar>
+              );
+            })}
+          </BarChart>
+        ) : activeType === "pie" ? (
+          <PieChart margin={{ top: 15, right: 15, bottom: 15, left: 15 }}>
+            <Tooltip content={<CustomTooltip />} />
+            <Legend wrapperStyle={{ color: "#cbd5e1", paddingTop: "12px", fontSize: "12px" }} />
+            <Pie
+              data={sanitizedData}
+              dataKey={finalSeries[0]?.dataKey || "value"}
+              nameKey={xKey}
+              cx="50%"
+              cy="50%"
+              innerRadius={60}
+              outerRadius={100}
+              paddingAngle={3}
+              isAnimationActive={false}
+              label={({ percent }: any) => (typeof percent === "number" && !isNaN(percent)) ? `${(percent * 100).toFixed(0)}%` : ""}
+              labelLine={false}
+            >
+              {sanitizedData.map((_: any, index: number) => (
+                <Cell
+                  key={`cell-${index}`}
+                  fill={DEFAULT_SERIES_COLORS[index % DEFAULT_SERIES_COLORS.length]}
+                  stroke="rgba(15, 23, 42, 0.8)"
+                  strokeWidth={2}
+                />
+              ))}
+            </Pie>
+          </PieChart>
+        ) : (
+          <BarChart data={sanitizedData} margin={{ top: 20, right: 35, left: 10, bottom: shouldRotate ? 45 : 20 }}>
+            <defs>
+              {finalSeries.map((s: any, idx: number) => {
+                const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
+                return (
+                  <linearGradient key={`${chartInstanceId}-barGrad-${idx}`} id={`${chartInstanceId}-barGrad-${idx}`} x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%" stopColor={color} stopOpacity={0.95} />
+                    <stop offset="100%" stopColor={color} stopOpacity={0.5} />
+                  </linearGradient>
+                );
+              })}
+            </defs>
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(255, 255, 255, 0.06)" vertical={false} />
+            <XAxis
+              dataKey={xKey}
+              stroke="#64748b"
+              tick={<CustomXAxisTick shouldRotate={shouldRotate} />}
+              height={shouldRotate ? 65 : 30}
+              interval={0}
+              axisLine={{ stroke: "rgba(255, 255, 255, 0.1)" }}
+              tickLine={false}
+            />
+            <YAxis stroke="#64748b" tick={{ fill: "#94a3b8", fontSize: 11 }} axisLine={false} tickLine={false} />
+            <Tooltip content={<CustomTooltip />} cursor={{ fill: "rgba(255, 255, 255, 0.04)", radius: 6 }} />
+            <Legend wrapperStyle={{ color: "#cbd5e1", paddingTop: "12px", fontSize: "12px" }} />
+            {finalSeries.map((s: any, idx: number) => {
+              const color = s.color || DEFAULT_SERIES_COLORS[idx % DEFAULT_SERIES_COLORS.length];
+              return (
+                <Bar
+                  key={s.dataKey}
+                  dataKey={s.dataKey}
+                  fill={`url(#${chartInstanceId}-barGrad-${idx})`}
+                  stroke={color}
+                  strokeWidth={1}
+                  name={s.name || s.dataKey}
+                  radius={[6, 6, 0, 0]}
+                  maxBarSize={44}
+                  isAnimationActive={false}
+                >
+                  <LabelList dataKey={s.dataKey} position="top" fill="#cbd5e1" fontSize={10} fontWeight={500} />
+                </Bar>
+              );
+            })}
+          </BarChart>
+        )}
+      </ResponsiveContainer>
+    );
+  };
+
+  return (
+    <div className={`recharts-glass-card ${isFullscreen ? "chart-card-fullscreen" : ""}`}>
+      <div className="recharts-card-header">
+        <div className="header-left">
+          <div className="chart-sparkle-icon">
+            <TrendingUp size={16} />
+          </div>
+          <div className="chart-header-info">
+            <h4 className="chart-title">{title}</h4>
+            <div className="chart-tags">
+              <span className="chart-type-pill">{activeType.replace("-", " ").toUpperCase()}</span>
+              <span className="chart-count-pill">{sanitizedData.length} itens</span>
+            </div>
+          </div>
+        </div>
+
+        <div className="header-right">
+          <div className="chart-type-toggle">
+            <button
+              className={`btn-toggle-type ${activeType === "bar-horizontal" ? "active" : ""}`}
+              onClick={() => setUserSelectedType("bar-horizontal")}
+              title="Barras Horizontais (Ideal para rankings e nomes longos)"
+            >
+              <LayoutList size={13} />
+            </button>
+            <button
+              className={`btn-toggle-type ${activeType === "bar" ? "active" : ""}`}
+              onClick={() => setUserSelectedType("bar")}
+              title="Barras Verticais"
+            >
+              <BarChart2 size={13} />
+            </button>
+            <button
+              className={`btn-toggle-type ${activeType === "line" ? "active" : ""}`}
+              onClick={() => setUserSelectedType("line")}
+              title="Linhas"
+            >
+              <TrendingUp size={13} />
+            </button>
+            <button
+              className={`btn-toggle-type ${activeType === "area" ? "active" : ""}`}
+              onClick={() => setUserSelectedType("area")}
+              title="Área"
+            >
+              <Activity size={13} />
+            </button>
+            <button
+              className={`btn-toggle-type ${activeType === "pie" ? "active" : ""}`}
+              onClick={() => setUserSelectedType("pie")}
+              title="Donut / Pizza"
+            >
+              <PieIcon size={13} />
+            </button>
+            <button
+              className={`btn-toggle-type ${activeType === "table" ? "active" : ""}`}
+              onClick={() => setUserSelectedType("table")}
+              title="Visualizar em Tabela"
+            >
+              <TableIcon size={13} />
+            </button>
+          </div>
+
+          <button onClick={handleExportCSV} className="btn-copy-chart-json" title="Exportar dados como CSV">
+            <Download size={13} />
+            <span>CSV</span>
+          </button>
+
+          <button onClick={handleCopyJSON} className="btn-copy-chart-json" title="Copiar JSON do Gráfico">
+            {copied ? <Check size={13} style={{ color: "#10b981" }} /> : <Copy size={13} />}
+            <span>{copied ? "Copiado" : "JSON"}</span>
+          </button>
+
+          <button
+            onClick={() => setIsFullscreen(!isFullscreen)}
+            className="btn-copy-chart-json"
+            title={isFullscreen ? "Restaurar tamanho" : "Maximizar gráfico"}
+          >
+            {isFullscreen ? <Minimize2 size={13} /> : <Maximize2 size={13} />}
+          </button>
+        </div>
+      </div>
+
+      {/* KPI Mini-Ribbon */}
+      {numCount > 0 && activeType !== "table" && (
+        <div className="chart-kpi-ribbon">
+          {leaderItem && (
+            <div className="kpi-card leader">
+              <span className="kpi-label">🏆 Maior</span>
+              <span className="kpi-val" title={String(leaderItem[xKey])}>
+                {String(leaderItem[xKey]).length > 15 ? String(leaderItem[xKey]).slice(0, 14) + "…" : leaderItem[xKey]}: <strong>{Number(leaderItem[primaryKey]).toLocaleString("pt-BR")}</strong>
+              </span>
+            </div>
+          )}
+          {minItem && (
+            <div className="kpi-card min">
+              <span className="kpi-label">📉 Menor</span>
+              <span className="kpi-val" title={String(minItem[xKey])}>
+                {String(minItem[xKey]).length > 15 ? String(minItem[xKey]).slice(0, 14) + "…" : minItem[xKey]}: <strong>{Number(minItem[primaryKey]).toLocaleString("pt-BR")}</strong>
+              </span>
+            </div>
+          )}
+          <div className="kpi-card avg">
+            <span className="kpi-label">📊 Média</span>
+            <span className="kpi-val"><strong>{avgVal.toLocaleString("pt-BR", { maximumFractionDigits: 1 })}</strong></span>
+          </div>
+          <div className="kpi-card count">
+            <span className="kpi-label">🔢 Total</span>
+            <span className="kpi-val"><strong>{sanitizedData.length}</strong> itens</span>
+          </div>
+        </div>
+      )}
+
+      <div className="recharts-card-body" style={{ width: "100%", minHeight: chartHeight, height: chartHeight, position: "relative" }}>
+        {renderChart()}
+      </div>
+    </div>
+  );
+});
+
 const ImageGalleryWidget: React.FC<{ jsonStr: string }> = ({ jsonStr }) => {
   const [selectedImage, setSelectedImage] = useState<any | null>(null);
 

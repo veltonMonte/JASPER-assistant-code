@@ -779,17 +779,11 @@ export class JasperWebSocketServer {
 
       case 'TERMINAL_APPROVAL_RESPONSE': {
         const { id, approved, customCommand, remember } = payload;
+        if (typeof id !== 'string' || typeof approved !== 'boolean') break;
+        await resolveTerminalApproval(id, { approved, customCommand, remember }, 'ui');
         if (id === this.pendingTerminalApprovalId) {
           this.pendingTerminalApprovalId = null;
         }
-        toolEvents.emit(`terminal_approval_response_${id}`, { approved, customCommand, remember });
-        this.broadcastToClients({
-          type: 'TERMINAL_APPROVAL_STATUS_UPDATE',
-          id,
-          approved,
-          customCommand,
-          remember,
-        });
         break;
       }
 

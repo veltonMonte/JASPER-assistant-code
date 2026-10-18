@@ -7,7 +7,9 @@
     "dev": "tsx watch src/server/server.ts",
     "build": "tsc",
     "start": "node dist/server/server.js",
-    "test:router": "tsx src/agent/router.ts"
+    "test:router": "tsx src/agent/router.ts",
+    "typecheck": "tsc --noEmit",
+    "typecheck:client": "tsc --noEmit -p client"
   },
   "keywords": [
     "ai",

@@ -7,4 +7,6 @@ jasper.db
 __pycache__/
 *.AppImage
 *.apk
+public/assets/
+client/public/*.apk
 squashfs-root/

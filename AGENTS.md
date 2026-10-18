@@ -1,49 +1,70 @@
-# Projeto: JASPER - Assistente Pessoal e Smart Home Integrado
+# JASPER — instruções do projeto
 
-## Visão Geral do Projeto
-O JASPER (anteriormente JASPER) é um assistente virtual conversacional altamente responsivo, operado por voz e texto, com ênfase na integração de automação residencial (Smart Home) e execução de tarefas locais no computador (Wake-on-LAN). Ele utiliza o **Gemini Live API (v1beta)** com streaming de áudio nativo (PCM 16kHz) via WebSockets para proporcionar conversas em tempo real fluidas e com interrupções naturais (barge-in).
+## Stack e execução
+- Servidor: Node.js + TypeScript, Express, WebSocket (`ws`) e SQLite (`sqlite3`).
+- Cliente: React 18 + Vite, Three.js, Recharts e CSS; idioma do produto: pt-BR.
+- IA: Gemini para texto e Gemini Live para áudio PCM e transcrição em tempo real.
+- O notebook hospeda o servidor; o navegador do aparelho cliente renderiza o 3D.
+- Instalar dependências: `npm ci` e `npm ci --prefix client`.
+- Desenvolvimento: `npm run dev`; cliente: `npm run dev --prefix client`.
+- Compilar: `npm run build` e `npm run build --prefix client`.
+- Executar o servidor compilado: `npm start`.
+- Testes: `npm run test:features`.
+- Tipos: `npm run typecheck` e `npm run typecheck:client`.
+- Nunca use credenciais reais em testes; não abra arquivos de segredos.
 
-A arquitetura frontend foi desenhada focando em design premium contemporâneo, evitando os estereótipos comuns de IAs. O painel central exibe estados geométricos abstratos que comunicam sua atividade cognitiva, aliado a uma paleta gráfica Graphite/Slate com destaques em Neon Cyan (JASPER Accent).
+## Estrutura atual
+- `src/server/`: servidor HTTP, rotas, WebSocket e agendamento.
+- `src/ai/`: Gemini, contexto, personalidade e instruções do modelo.
+- `src/agent/router.ts`: roteador determinístico de intenções.
+- `src/tools/`: declarações, despacho e implementação das ferramentas.
+- `src/voice/`: captura, VAD, transcrição, síntese e preferências de voz.
+- `src/database/`: schema e persistência SQLite.
+- `src/proactive/`: notícias e intervenções espontâneas.
+- `src/presentation/schema.ts`: validação das apresentações recebidas do modelo.
+- `client/src/`: componentes React, hooks, tipos visuais e estilos.
+- `public/`: arquivos servidos e saída compilada do cliente em `public/assets/`.
+- `tests/`: testes `node:test` com `tsx`; `docs/`: relatórios e decisões.
+- `jasper-agent.js`: agente remoto atual; não habilitar antes da revisão de segurança.
 
-## Tecnologias Utilizadas
-- **Backend:** Node.js (TypeScript), Express, `ws` (WebSockets).
-- **IA e Voz:** API Gemini v1beta (BidiGenerateContent), conversão PCM nativa.
-- **Frontend:** Vanilla HTML/CSS/JS com `AudioContext` para buffering contínuo de áudio sem dependência do elemento `<audio>`. 
-- **Integração Externa:** Wake-on-LAN (`wake_on_lan`), Mockups de chamadas HTTP para controle Smart Home.
-- **Tipografia e Ícones:** Space Grotesk, Inter, e Phosphor Icons.
+## Regras de trabalho
+1. Trabalhe em uma fase por vez, na ordem autorizada; não adiante fases futuras.
+2. Antes de editar, apresente plano curto: arquivos, mudanças e testes. Continue sem
+   esperar resposta, salvo decisão que mude o escopo.
+3. Faça mudanças pequenas e verificáveis. Ao fechar uma fase, execute
+   `npm run test:features`, `npx tsc --noEmit` e `npx tsc --noEmit -p client`.
+   Registre falhas da linha de base; não as corrija fora da fase correspondente.
+4. Escreva testes antes ou junto das correções. Cada vulnerabilidade corrigida deve
+   ter regressão que falharia no código anterior. Caracterizações inseguras da
+   Fase 0 devem usar `test.todo` ou comentário explícito sobre a Fase 1.
+5. Não refatore, renomeie ou reformate código fora da fase; preserve funcionalidades
+   e alterações anteriores do usuário.
+6. Nunca leia, imprima, copie ou cite conteúdo de `.env` ou arquivos de segredos.
+   Use valores falsos nos testes e não exponha credenciais em logs.
+7. Não execute comandos destrutivos, limpeza de banco, `git reset --hard`,
+   `git push --force` ou qualquer `git push`. Nunca apague `jasper.db`.
+8. Faça commits pequenos em português: `fase-N: descrição curta`. Não inclua
+   alterações anteriores ou segredos por engano.
+9. Se a instrução da fase conflitar com o código real, pare e informe o trecho
+   exato; não adivinhe. Achados de auditorias anteriores precisam ser conferidos.
+10. Termine cada fase com relatório: mudanças por arquivo, testes novos, resultados
+    dos comandos, riscos restantes e revisão manual necessária.
+11. Mensagens do produto, erros e comentários novos devem estar em pt-BR.
 
-## Histórico de Implementações Recentes
-Durante a última iteração de desenvolvimento, os seguintes avanços foram concluídos:
+## Princípio de segurança
+O modelo sugere; o código valida e decide. A saída do modelo não vai diretamente
+para execução de processos, gravação de arquivos ou rede. Web, arquivos e
+transcrições são dados não confiáveis. Ações com efeito colateral devem passar
+por um único executor com política, aprovação humana e auditoria.
+Esse princípio é o alvo das fases de segurança; sua presença neste documento
+não significa que o código legado já o cumpra.
+Não exponha a API fora da máquina nem ligue o agente remoto antes da Fase 1.
 
-1. **Reestruturação Visual (Identity Upgrade):**
-   - Projeto completamente renomeado de JASPER para JASPER.
-   - Refatoração da folha de estilos `styles.css` eliminando interfaces "genéricas de chat" e adotando o padrão dark sofisticado.
-   - O orbe de atividade foi substituído por geometria abstrata sincronizada a classes CSS (`.shape`, `.s1`, `.s2`) reagindo aos eventos de `IDLE`, `LISTENING`, `PROCESSING` e `SPEAKING`.
-   - Remoção completa de Emojis do código; implementação sistemática de Phosphor Icons.
-   
-2. **Nova Arquitetura Frontend (`index.html` e `app.js`):**
-   - Criação de um Painel Contextual Lateral (`aside.context-panel`) para monitorar o status de dispositivos (ex: luz, ar condicionado) sem precisar demandar informações textuais constantes da IA.
-   - Sistema unificado de Chat com cartões de ações (`msg-action`) no lugar de textos longos descritivos.
-   
-3. **Integração Wake-on-LAN (WoL):**
-   - Script de ferramentas `src/tools/wol.ts` adicionado com o pacote `wake_on_lan` para permitir acionamento de um computador da rede.
-   - Variáveis configuráveis adicionadas no `.env` (`DESKTOP_MAC_ADDRESS`).
-
-4. **Integração Smart Home:**
-   - Criação do scaffold de automação residencial `src/tools/smarthome.ts` com funções `toggleDevice` e `getDeviceStatus`.
-   - Adicionadas declarações de função dentro do contexto do Gemini, permitindo ao LLM acionar e desligar equipamentos domésticos de maneira natural durante a conversa.
-
-5. **Sessão de Desenvolvimento (Hoje):**
-   - **Renderização de Gráficos:** Integração com a biblioteca `recharts` e criação da tool `renderizar_grafico` para permitir a geração e exibição correta de gráficos de linha/barras nativos diretamente na interface de chat, mesmo quando operando sob o modelo de voz do Gemini Live.
-   - **Correção Visual:** Ajustes no `ChartComponent` substituindo classes utilitárias não suportadas por estilos inline diretos, sanando o bug de containers invisíveis (retângulo preto).
-   - **Filtro de Raciocínio Aprimorado:** Refinamento agressivo no sistema `cleanTextMonologue` (cliente e servidor) mapeando heurísticas de contagem de palavras e idiomas para bloquear o vazamento de monólogos em inglês (ex: *"Constructing the Line Chart"*) no chat do usuário.
-   - **Personalidade da IA:** Revisão do `JASPER_SYSTEM_PROMPT` para injetar comportamento humorístico, sarcasmo amigável, piadas e referências robustas a filmes da cultura pop (Matrix, Star Wars, Homem de Ferro).
-   - **Configuração Remota via Tailscale:** Ativação manual e autenticação do daemon do `tailscaled` via root, inserindo o servidor Linux na malha VPN. Isso habilitou o acesso externo nativo e seguro à interface do JASPER pelo IP `100.108.231.26` via dispositivos remotos.
-   - **Diagnóstico Wake-on-LAN:** Inspeção de conectividade inter-dispositivos via Tailscale e explicação técnica do fluxo exigido pelo pacote mágico (MAC address local) para o disparo da funcionalidade `ligar_pc`.
-
-## Como Executar
-O servidor depende dos arquivos `.env` e TypeScript rodando.
-```bash
-npm run dev
-```
-Ao inicializar, a API abre portas locais WebSocket e HTTP, disponibilizando o cliente visual em `localhost:3000` ou similar (também acessível externamente pelo IP local ou Tailscale). O backend negocia conexões BidiWebSocket com o Gemini e orquestra execuções locais quando funções (Tools) são chamadas via texto ou detecção de fala.
+## Áreas sensíveis
+- `src/tools/terminal.ts`: aprovação, interpretação e execução de comandos.
+- `src/tools/applications.ts`: abertura de programas e argumentos.
+- `src/tools/media.ts`: downloads, rede e gravação de arquivos.
+- `src/tools/web.ts`: pesquisa, processos externos e acesso a URLs.
+- `src/server/websocket.ts`: identidade, autorização e mensagens dos dispositivos.
+- `src/server/routes.ts` e `src/server/server.ts`: autenticação e exposição HTTP.
+- `jasper-agent.js`: execução no computador remoto.

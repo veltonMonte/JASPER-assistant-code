@@ -8,7 +8,8 @@ import { toggleDevice, getDeviceStatus } from './smarthome.js';
 import { executarTerminal, solicitarTerminalPorVoz, confirmarComandoTerminal } from './terminal.js';
 import { baixarMidia } from './media.js';
 import { ajustarPersonalidade, consultarPersonalidade, restaurarPersonalidadePadrao } from './personality.js';
-import { parsePresentation } from '../presentation/schema.js';
+import { createVisualPresentation } from '../presentation/scene-generation.js';
+import { currentSceneSession } from '../presentation/scene-session.js';
 
 /**
  * Declaração das ferramentas disponíveis para o modelo Google Gemini (Function Calling)
@@ -259,7 +260,7 @@ export const geminiToolDeclarations = [
   },
   {
     name: 'criar_apresentacao_visual',
-    description: 'Abre uma apresentação visual cinematográfica holográfica 3D, diagrama ou desenho explicativo na tela, narrada pelo Jasper.',
+    description: 'Cria qualquer objeto ou cena com geometria livre SceneSpec v2 em sceneJson; também aceita apresentação completa em presentationJson. Para alterações da cena ativa use scenePatchJson; para desfazer use undoScene=true. Inclua narration para sceneJson, edições e desfazer. Nunca substitua um assunto por preset.',
     parameters: {
       type: 'OBJECT',
       properties: {
@@ -270,9 +271,12 @@ export const geminiToolDeclarations = [
         element: { type: 'STRING', description: 'Elemento se for átomo (ex: carbon, hydrogen, oxygen, iron)' },
         primaryColor: { type: 'STRING', description: 'Cor primária neon (#00f3ff)' },
         narration: { type: 'STRING', description: 'Texto narrado pelo Jasper de 1 a 2 frases curtas (100 a 250 caracteres)' },
-        presentationJson: { type: 'STRING', description: 'Opcional: JSON completo para múltiplas etapas' },
+        presentationJson: { type: 'STRING', description: 'JSON completo {title,subtitle?,steps:[{title,narration,kind:"model3d",scene:SceneSpec_v2} ou diagrama/desenho]}. As narrações ficam nas etapas.' },
+        sceneJson: { type: 'STRING', description: 'JSON SceneSpec v2 com version:2, nodes e geometrias/materiais. Descreva o objeto solicitado, sem catálogo de assuntos. Use com narration.' },
+        scenePatchJson: { type: 'STRING', description: 'JSON {targetSceneId,operations:[{op:"updateNode",nodeId,patch:{position?,rotation?,scale?,material?,geometry?}} ou {op:"removeNode",nodeId} ou {op:"addNode",parentNodeId?,node} ou {op:"updateMaterial",materialId,patch} ou {op:"updateGeometry",geometryId,geometry} ou {op:"setMetadata",metadata}]}. Preserve ids da cena ativa. Use com narration.' },
+        undoScene: { type: 'BOOLEAN', description: 'true para desfazer a última alteração da cena desta conversa. Use com narration.' },
       },
-      required: ['title', 'kind', 'narration'],
+      required: [],
     },
   },
   {
@@ -346,13 +350,14 @@ import { toolEvents } from '../events/toolEvents.js';
 export interface ToolExecutionContext {
   /** true quando chamado pela sessão de voz (Gemini Live): ferramentas de aprovação não bloqueiam o modelo */
   live?: boolean;
+  visualSessionId?: string;
 }
 
 export async function executeToolByName(name: string, args: Record<string, any> = {}, ctx: ToolExecutionContext = {}): Promise<any> {
   console.log(`🛠️ Executando Ferramenta: [${name}] com argumentos:`,
     name === 'criar_apresentacao_visual' ? `{ apresentação: ${String(args.presentationJson || '').length} caracteres }` : JSON.stringify(args));
   const startTime = Date.now();
-  toolEvents.emit('pipeline_action_start', { tool: name, args });
+  toolEvents.emit('pipeline_action_start', { tool: name, args, visualSessionId: ctx.visualSessionId||currentSceneSession() });
   let result: any;
 
   try {
@@ -447,30 +452,7 @@ export async function executeToolByName(name: string, args: Record<string, any> 
         break;
       }
       case 'criar_apresentacao_visual': {
-        let presentation;
-        if (args.presentationJson) {
-          presentation = parsePresentation(args.presentationJson);
-        } else {
-          presentation = parsePresentation({
-            title: args.title || 'Estúdio Visual Holográfico',
-            subtitle: args.subtitle || '',
-            steps: [
-              {
-                title: args.title || 'Modelo 3D',
-                narration: args.narration || 'Apresentação visual iniciada.',
-                kind: (args.kind as any) || 'model3d',
-                preset: (args.preset as any) || 'atom',
-                config: {
-                  element: args.element || 'carbon',
-                  primaryColor: args.primaryColor || '#00f3ff',
-                  accentColor: args.accentColor || '#ff007f',
-                },
-                parts: [],
-              },
-            ],
-          });
-        }
-        result = { success: true, presentation, message: 'Apresentação aberta. A interface vai narrar cada etapa; não repita a narração.' };
+        result = createVisualPresentation(args,ctx.visualSessionId||currentSceneSession());
         break;
       }
       case "listar_dispositivos":
@@ -499,7 +481,7 @@ export async function executeToolByName(name: string, args: Record<string, any> 
 
   const durationMs = Date.now() - startTime;
   const isSuccess = !result?.error && result?.success !== false;
-  toolEvents.emit('pipeline_action_end', { tool: name, durationMs, success: isSuccess, args, result });
+  toolEvents.emit('pipeline_action_end', { tool: name, durationMs, success: isSuccess, args, result, visualSessionId: ctx.visualSessionId||currentSceneSession() });
   console.log(`✅ Ferramenta [${name}] concluída em ${durationMs}ms`);
   return { ...result, _executionTimeMs: durationMs };
 }

@@ -74,7 +74,7 @@ class PresentationErrorBoundary extends React.Component<
 export default function App() {
   const { state, isConnected, isMicActive, isMicStarting, isVoiceReady, messages, transcript, activeMic, personality, updatePersonality,
     resetPersonality, sendText, toggleMic, getAudioLevel, sendTerminalApproval, activeAlarm, stopAlarm, readProactive, previewVoice, voiceRequest, proactiveAudioReady, authStatus, pendingDeviceRequests, requestDeviceAccess, resolveDeviceAccess,
-    presentation, presentationOpen, presentationReady, closePresentation, openPresentation, setPresentationNarrating, getNarrationContext, apiRequest } = useJasperWebSocket()
+    presentation, presentationOpen, presentationReady, closePresentation, openPresentation, setPresentationNarrating, activateScene, getNarrationContext, apiRequest } = useJasperWebSocket()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [proactiveOpen, setProactiveOpen] = useState(false)
   const [diagnosticOpen, setDiagnosticOpen] = useState(false)
@@ -109,12 +109,12 @@ export default function App() {
           <PresentationErrorBoundary onClose={closePresentation}>
             <Suspense fallback={<div className="presentation-loading">Preparando estúdio visual…</div>}>
               <PresentationScreen
-                key={presentation.id}
                 presentation={presentation}
                 ready={presentationReady}
                 request={voiceRequest}
                 getNarrationContext={getNarrationContext}
                 onClose={closePresentation}
+                onSceneActive={activateScene}
                 onNarratingChange={setPresentationNarrating}
               />
             </Suspense>

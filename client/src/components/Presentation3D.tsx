@@ -8,7 +8,7 @@ const EMPTY_PARTS: PresentationPart[] = [];
 
 function FallbackScene({ step }: { step: PresentationStep }) {
   const preset = step.preset || 'custom';
-  const title = getPresetDefinition(preset).label;
+  const title = step.scene ? 'Cena livre — visualização 3D indisponível neste navegador' : getPresetDefinition(preset).label;
   return <svg className="presentation-3d-fallback" viewBox="0 0 100 100" aria-label={`Esquema leve: ${step.title}`}>
     <g fill="none" stroke="#8fcbdc" strokeWidth=".6">
       {preset === 'atom' && <><ellipse cx="50" cy="48" rx="30" ry="14" /><ellipse cx="50" cy="48" rx="30" ry="14" transform="rotate(60 50 48)" /><ellipse cx="50" cy="48" rx="30" ry="14" transform="rotate(120 50 48)" /><circle cx="50" cy="48" r="6" fill="#c67183" /></>}
@@ -23,7 +23,8 @@ function FallbackScene({ step }: { step: PresentationStep }) {
   </svg>;
 }
 
-export default function Presentation3D({ parts = EMPTY_PARTS, step }: { parts?: PresentationPart[]; step?: PresentationStep }) {
+export default function Presentation3D({ parts = EMPTY_PARTS, step, onReady }: { parts?: PresentationPart[]; step?: PresentationStep; onReady?:()=>void }) {
+  const onReadyRef=useRef(onReady);onReadyRef.current=onReady;
   const host = useRef<HTMLDivElement>(null);
   const runtime = useRef<SceneRuntime | null>(null);
   const [fallback, setFallback] = useState(false);
@@ -41,10 +42,10 @@ export default function Presentation3D({ parts = EMPTY_PARTS, step }: { parts?: 
   useEffect(() => {
     if (!host.current) return;
     try {
-      const scene = new SceneRuntime(host.current, quality, { onStats: next => { setStats(next); setQuality(next.tier); }, onError: () => { setFallback(true); setLoading(false); }, onLoading: setLoading });
+      const scene = new SceneRuntime(host.current, quality, { onStats: next => { setStats(next); setQuality(next.tier); }, onError: () => { setFallback(true); setLoading(false);onReadyRef.current?.(); }, onLoading: value=>{setLoading(value);if(!value)onReadyRef.current?.();} });
       runtime.current = scene;
       return () => { scene.dispose(); runtime.current = null; };
-    } catch (error) { console.error('A renderização 3D não pôde ser iniciada.', error); setFallback(true); setLoading(false); }
+    } catch (error) { console.error('A renderização 3D não pôde ser iniciada.', error); setFallback(true); setLoading(false);onReadyRef.current?.(); }
   }, []);
   useEffect(() => { if (runtime.current) void runtime.current.setSubject(currentStep); }, [currentStep]);
 

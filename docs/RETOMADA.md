@@ -29,3 +29,17 @@ no relatório da fase 2; o Node do sistema não foi alterado.
 Ao retomar: revisar AGENTS.md, git status e os últimos commits; começar pela
 fase 3, conferir o rascunho contra o código atual e completar testes, contexto de
 sessão e interface antes de ativá-lo. Fases 4–7 não foram iniciadas.
+
+
+## Retomada autorizada: modelagem livre e voz — 18/10/2026
+
+O usuário retomou especificamente o plano de modelagem sem presets e pediu
+correção das respostas sem voz. Foram integrados os contratos SceneSpec v2
+iniciados por ele, compilador geométrico, validação, geração estruturada,
+edição por sessão e desfazer. O cliente conserva a saída de áudio desbloqueada
+e solicita a voz configurada quando um turno chega apenas em texto.
+
+As fases de segurança 3–7 continuam pausadas. O rascunho externo da fase 3
+não foi restaurado. A próxima retomada deve partir do pedido atual do usuário,
+sem tratar o parágrafo antigo “Ao retomar” como autorização automática.
+Consulte MODELAGEM-LIVRE-E-VOZ.md para arquivos, testes e limites.

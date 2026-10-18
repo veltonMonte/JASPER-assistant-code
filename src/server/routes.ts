@@ -1,3 +1,5 @@
+import { withSceneSession } from '../presentation/scene-session.js';
+import { beginSceneTurn } from '../presentation/scene-generation.js';
 import { voicePreferences } from '../voice/preferences.js';
 import { VOICE_OPTIONS, validateVoiceSettings } from '../voice/profiles.js';
 import { jasperWsServer } from "./websocket.js";
@@ -55,7 +57,9 @@ router.post('/command', async (req: Request, res: Response) => {
     }
 
     wakeWordManager.setState('PROCESSING');
-    const result = await jasperAgent.processCommand(command, 0);
+    const visualSession=jasperWsServer.visualSessionForToken((req.header('authorization')||'').replace(/^Bearer\s+/i,''));
+    beginSceneTurn(visualSession);
+    const result = await withSceneSession(visualSession,()=>jasperAgent.processCommand(command,0));
     wakeWordManager.setState('SPEAKING');
 
     setTimeout(() => {

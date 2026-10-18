@@ -89,6 +89,7 @@ export default function PresentationScreen({
   getNarrationContext,
   onClose,
   onNarratingChange,
+  onSceneActive,
 }: {
   presentation: Presentation;
   ready: boolean;
@@ -96,13 +97,20 @@ export default function PresentationScreen({
   getNarrationContext: () => AudioContext;
   onClose: () => void;
   onNarratingChange: (value: boolean) => void;
+  onSceneActive?: (id:string) => void;
 }) {
   const [stepIndex, setStepIndex] = useState(0);
   const [playing, setPlaying] = useState(true);
   const [audioPlaying, setAudioPlaying] = useState(false);
+  useEffect(()=>{const interrupt=()=>setPlaying(false);window.addEventListener('jasper-audio-interrupt',interrupt);return()=>window.removeEventListener('jasper-audio-interrupt',interrupt);},[]);
   const [error, setError] = useState('');
 
   const step = presentation.steps[stepIndex];
+  const [builtScene,setBuiltScene]=useState('');
+  const sceneKey=`${presentation.id}:${stepIndex}`;
+  const sceneReady=step?.kind!=='model3d'||builtScene===sceneKey;
+  const markSceneReady=useCallback(()=>setBuiltScene(sceneKey),[sceneKey]);
+  useEffect(()=>{if(step?.scene?.id&&sceneReady)onSceneActive?.(step.scene.id);},[step?.scene?.id,sceneReady,onSceneActive]);
 
   useEffect(() => {
     setStepIndex(0);
@@ -187,12 +195,12 @@ export default function PresentationScreen({
   }, [stepIndex, loadClip, presentation.steps.length]);
 
   useEffect(() => {
-    onNarratingChange(ready && playing);
+    onNarratingChange(ready && sceneReady && playing);
     return () => onNarratingChange(false);
-  }, [ready, playing, onNarratingChange]);
+  }, [ready, sceneReady, playing, onNarratingChange]);
 
   useEffect(() => {
-    if (!ready || !playing || !step) return;
+    if (!ready || !sceneReady || !playing || !step) return;
     let source: AudioBufferSourceNode | null = null;
     let disposed = false;
     setAudioPlaying(false);
@@ -249,7 +257,7 @@ export default function PresentationScreen({
         source.disconnect();
       }
     };
-  }, [ready, playing, presentation.id, presentation.steps.length, step, stepIndex, loadClip, getSafeContext]);
+  }, [ready, sceneReady, playing, presentation.id, presentation.steps.length, step, stepIndex, loadClip, getSafeContext]);
 
   const goTo = (index: number) => {
     try {
@@ -296,7 +304,7 @@ export default function PresentationScreen({
             </span>
           </div>
           {step?.kind === 'model3d' ? (
-            <Presentation3D parts={step.parts || []} step={step} />
+            <Presentation3D parts={step.parts || []} step={step} onReady={markSceneReady} />
           ) : step?.kind === 'drawing' ? (
             <PresentationDrawing key={stepIndex} step={step} />
           ) : (

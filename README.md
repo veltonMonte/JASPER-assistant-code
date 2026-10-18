@@ -164,6 +164,26 @@ Peça por voz ou texto: **“Jasper, explique o fluxo de uma API em uma apresent
 
 Os objetos 3D são composições estilizadas de formas geométricas criadas para explicar ideias. Não são modelos técnicos exatos nem arquivos CAD. A geração visual requer a conexão Gemini; a narração usa o serviço de voz natural já configurado. Em navegadores sem WebGL, o texto da etapa continua disponível.
 
+### Modelagem livre e edição da cena
+
+A geração 3D usa uma descrição geométrica criada para cada pedido, sem escolher
+um objeto em uma lista de presets. Experimente **“Crie uma bicicleta 3D simples”**,
+**“Faça uma planta de casa vista de cima”** ou **“Modele um teclado com teclas”**.
+Depois, peça **“Mude a cor do quadro para vermelho”**, **“Aumente as rodas”** ou
+**“Desfaça a última alteração”**. Em apresentações com várias etapas, a edição
+se aplica à cena visível. O histórico de oito versões dura enquanto a sessão
+estiver ativa; reiniciar o servidor encerra esse histórico.
+
+A cena só substitui a anterior após validação e construção. São representações
+geométricas aproximadas: anatomia, encaixes e medidas podem precisar de ajustes.
+A qualidade depende da geração e da conexão com o provedor. Falhas são informadas
+na conversa, preservando a cena anterior.
+
+Respostas Live que chegam apenas em texto agora solicitam leitura com a voz
+configurada. **Ouvir resposta** permite repetir uma mensagem; use **Reproduzir
+narração** no Estúdio. O navegador pode exigir um toque para liberar o som.
+Detalhes e verificações em [Modelagem livre e voz](docs/MODELAGEM-LIVRE-E-VOZ.md).
+
 ## Acesso seguro à API (Fase 1)
 
 O servidor usa `127.0.0.1` por padrão. Para acesso pelo Tailscale, configure

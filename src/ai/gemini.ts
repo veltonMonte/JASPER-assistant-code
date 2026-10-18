@@ -1,3 +1,4 @@
+import { activeScenePrompt } from '../presentation/scene-session.js';
 import { buildPersonalityPrompt } from "./personality.js";
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { config } from '../config/config.js';
@@ -94,7 +95,7 @@ export class GeminiBrain {
       
       const timeContext = `\n[CONTEXTO DE TEMPO DA SESSÃO]\nO horário atual em Brasília é: ${fmtStr}.\n(Formato ISO: ${isoStr}).\nATENÇÃO: Você DEVE SEMPRE chamar a ferramenta 'consultarHorario' ANTES de agendar qualquer alarme para ter certeza absoluta da hora e do dia ATUAL e evitar atrasos!\n`;
 
-      const fullSystemInstruction = JASPER_SYSTEM_PROMPT + personalityPrompt + memorySummary + timeContext;
+      const fullSystemInstruction = JASPER_SYSTEM_PROMPT + personalityPrompt + memorySummary + timeContext + activeScenePrompt();
       const cleanHistory = this.sanitizeHistory(historyContext);
 
       const model = this.genAI.getGenerativeModel({

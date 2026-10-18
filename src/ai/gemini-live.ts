@@ -1,3 +1,4 @@
+import { activeScenePrompt } from '../presentation/scene-session.js';
 import { buildPersonalityPrompt } from "./personality.js";
 import { WebSocket } from 'ws';
 import { EventEmitter } from 'events';
@@ -24,6 +25,9 @@ export class GeminiLiveSession extends EventEmitter {
   public isLiveConnected(): boolean {
     return this.isConnected && this.setupComplete && this.ws !== null && this.ws.readyState === WebSocket.OPEN;
   }
+
+  private visualSessionId='';
+  public setVisualSession(id:string):void {this.visualSessionId=id;}
 
   public async connect(): Promise<void> {
     if (this.reconnectTimer) {
@@ -199,6 +203,7 @@ export class GeminiLiveSession extends EventEmitter {
   public sendTextPrompt(text: string): boolean {
     if (!this.isLiveConnected()) return false;
 
+    text = text + activeScenePrompt(this.visualSessionId);
     const textPayload = {
       clientContent: {
         turns: [
@@ -227,13 +232,14 @@ export class GeminiLiveSession extends EventEmitter {
       const functionCalls = response.toolCall.functionCalls;
       if (functionCalls && Array.isArray(functionCalls)) {
         for (const fc of functionCalls) {
-          console.log(`🛠️ Gemini Live solicitou chamada de função: [${fc.name}]`, fc.args);
+          console.log(`🛠️ Gemini Live solicitou chamada de função: [${fc.name}]`,
+            fc.name === 'criar_apresentacao_visual' ? `{ apresentação: ${String(fc.args?.presentationJson || '').length} caracteres }` : fc.args);
           
           // Emite evento de status da pipeline para a interface web/mobile
           this.emit('tool_call_start', { name: fc.name, args: fc.args });
 
           try {
-            const toolResult = await executeToolByName(fc.name, fc.args || {}, { live: true });
+            const toolResult = await executeToolByName(fc.name, fc.args || {}, { live: true,visualSessionId:this.visualSessionId });
             this.emit('tool_call_end', { name: fc.name, result: toolResult });
             this.sendToolResponse(fc.id || fc.name, fc.name, toolResult);
           } catch (err: any) {

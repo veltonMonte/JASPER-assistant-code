@@ -1,3 +1,4 @@
+import { ensureAudioRunning, LiveVoiceTurn, canStartManualVoice } from '../lib/voicePlayback';
 import { useState, useEffect, useRef, useCallback } from 'react';
 import { AutomaticMicrophone } from '../lib/automaticMicrophone';
 import type { Presentation } from '../lib/presentation';
@@ -77,6 +78,7 @@ export interface UseJasperReturn {
   presentationOpen: boolean;
   presentationReady: boolean;
   closePresentation: () => void;
+  activateScene: (id:string) => void;
   openPresentation: () => void;
   setPresentationNarrating: (value: boolean) => void;
   authStatus: AuthStatus;
@@ -306,7 +308,7 @@ export function useJasperWebSocket(): UseJasperReturn {
   const closePresentation = useCallback(() => {
     if (presentationReadyTimerRef.current) clearTimeout(presentationReadyTimerRef.current);
     presentationReadyTimerRef.current = null;
-    presentationOpenRef.current = false; setPresentationOpen(false); presentationNarratingRef.current = false;
+    presentationPendingRef.current = false; presentationOpenRef.current = false; setPresentationOpen(false); presentationNarratingRef.current = false;
   }, []);
   const openPresentation = useCallback(() => { presentationOpenRef.current = true; setPresentationReady(true); setPresentationOpen(true); }, []);
   const audioUnlockedRef = useRef(false);
@@ -350,6 +352,10 @@ export function useJasperWebSocket(): UseJasperReturn {
   
   // Audio Playback
   const audioContextRef = useRef<AudioContext | null>(null);
+  const pcmSourcesRef = useRef(new Set<AudioBufferSourceNode>());
+  const pcmGenerationRef = useRef(0);
+  const liveVoiceTurnRef = useRef(new LiveVoiceTurn());
+  const audioBlockedRef = useRef(false);
   const localSpeechAbortRef = useRef<AbortController | null>(null);
   const localSpeechSourceRef = useRef<AudioBufferSourceNode | null>(null);
   const speechGenerationRef = useRef(0);
@@ -380,7 +386,7 @@ export function useJasperWebSocket(): UseJasperReturn {
       analyserRef.current = analyser;
     }
     if (audioContextRef.current.state === 'suspended') {
-      audioContextRef.current.resume();
+      void audioContextRef.current.resume().catch(() => {});
     }
   }, []);
 
@@ -389,32 +395,24 @@ export function useJasperWebSocket(): UseJasperReturn {
     return audioContextRef.current!;
   }, [initAudioContext]);
 
-  const playAudioChunk = useCallback((base64Audio: string) => {
+  const playAudioChunk = useCallback(async (base64Audio: string) => {
     initAudioContext();
-    const ctx = audioContextRef.current!;
-    if (ctx.state === 'suspended') {
-      ctx.resume();
+    const ctx=audioContextRef.current!,generation=pcmGenerationRef.current;
+    try {
+      if(!await ensureAudioRunning(ctx))throw new Error('O navegador bloqueou a saída de áudio.');
+      if(generation!==pcmGenerationRef.current||ctx.state==='closed')return;
+      const samples=base64ToFloat32Array(base64Audio);if(!samples.length)return;
+      const buffer=ctx.createBuffer(1,samples.length,24000);buffer.getChannelData(0).set(samples);
+      const source=ctx.createBufferSource();source.buffer=buffer;source.connect(analyserRef.current||ctx.destination);
+      nextPlayTimeRef.current=Math.max(nextPlayTimeRef.current,ctx.currentTime+.025);
+      if(nextPlayTimeRef.current-ctx.currentTime>12)throw new Error('A fila de voz ficou atrasada.');
+      pcmSourcesRef.current.add(source);source.onended=()=>{source.disconnect();pcmSourcesRef.current.delete(source);if(!pcmSourcesRef.current.size&&!localSpeechSourceRef.current&&!localSpeechAbortRef.current)setState('IDLE');};
+      source.start(nextPlayTimeRef.current);nextPlayTimeRef.current+=buffer.duration;
+    } catch(error) {
+      if(generation!==pcmGenerationRef.current)return;
+      if(!audioBlockedRef.current){audioBlockedRef.current=true;console.warn('Não foi possível iniciar a saída de voz.',error);setMessages(previous=>[...previous,{id:`${Date.now()}-audio-blocked`,sender:'system',text:'Toque em Ouvir na resposta para ativar a saída de voz neste navegador.'}]);}
+      setState('IDLE');
     }
-
-    const float32Data = base64ToFloat32Array(base64Audio);
-    const buffer = ctx.createBuffer(1, float32Data.length, 24000);
-    buffer.getChannelData(0).set(float32Data);
-
-    const source = ctx.createBufferSource();
-    source.buffer = buffer;
-    if (analyserRef.current) {
-      source.connect(analyserRef.current);
-    } else {
-      source.connect(ctx.destination);
-    }
-
-    const currentTime = ctx.currentTime;
-    if (nextPlayTimeRef.current < currentTime) {
-      nextPlayTimeRef.current = currentTime + 0.08;
-    }
-
-    source.start(nextPlayTimeRef.current);
-    nextPlayTimeRef.current += buffer.duration;
   }, [initAudioContext]);
 
   const cancelLocalSpeech = useCallback(() => {
@@ -430,12 +428,11 @@ export function useJasperWebSocket(): UseJasperReturn {
 
   const stopAllAudio = useCallback(() => {
     cancelLocalSpeech();
-    if (audioContextRef.current) {
-      audioContextRef.current.close();
-      audioContextRef.current = null;
-    }
-    analyserRef.current = null;
-    nextPlayTimeRef.current = 0;
+    pcmGenerationRef.current++;
+    for(const source of pcmSourcesRef.current){source.onended=null;try{source.stop();source.disconnect();}catch{}}
+    pcmSourcesRef.current.clear();liveVoiceTurnRef.current.reset();audioBlockedRef.current=false;
+    nextPlayTimeRef.current=audioContextRef.current?.currentTime||0;
+    if(typeof window!=='undefined')window.dispatchEvent(new Event('jasper-audio-interrupt'));
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       window.speechSynthesis.cancel();
     }
@@ -478,7 +475,7 @@ export function useJasperWebSocket(): UseJasperReturn {
       const audio = await context.decodeAudioData(wav);
       if (generation !== speechGenerationRef.current || controller.signal.aborted) return;
       if (audio.numberOfChannels !== 1 || !audio.length) throw new Error('Formato de voz inválido.');
-      await context.resume();
+      if(!await ensureAudioRunning(context))throw new Error('Toque em Ouvir para ativar o áudio neste navegador.');
       if (generation !== speechGenerationRef.current || controller.signal.aborted) return;
       const source = context.createBufferSource();
       source.buffer = audio;
@@ -493,8 +490,9 @@ export function useJasperWebSocket(): UseJasperReturn {
       };
       source.start(context.currentTime + .025);
       setState('SPEAKING');
-    } catch {
+    } catch (error) {
       if (generation !== speechGenerationRef.current) return;
+      console.warn('Não foi possível reproduzir a leitura natural.',error);
       localSpeechAbortRef.current = null;
       setState('IDLE');
       setMessages(previous => [...previous, {
@@ -518,7 +516,7 @@ export function useJasperWebSocket(): UseJasperReturn {
   const speakTextRef = useRef(speakText);
   speakTextRef.current = speakText;
   const readProactive = useCallback((text: string) => {
-    if (stateRef.current !== 'IDLE') return;
+    if (!canStartManualVoice(stateRef.current)) return;
     initAudioContext();
     audioUnlockedRef.current = true;
     setProactiveAudioReady(true);
@@ -530,9 +528,10 @@ export function useJasperWebSocket(): UseJasperReturn {
     headers.set('Authorization', `Bearer ${voiceSessionTokenRef.current}`);
     return fetch(`/api/${path}`, { ...init, headers });
   }, []);
+  const activateScene=useCallback((sceneId:string)=>{if(wsRef.current?.readyState===WebSocket.OPEN)wsRef.current.send(JSON.stringify({type:'ACTIVATE_SCENE',sceneId}));},[]);
   const voiceRequest = useCallback((path: string, init: RequestInit = {}) => apiRequest(`voice/${path}`, init), [apiRequest]);
   const previewVoice = useCallback((settings: VoiceSettings) => {
-    if (stateRef.current !== 'IDLE') return;
+    if (!canStartManualVoice(stateRef.current)) return;
     initAudioContext();
     audioUnlockedRef.current = true;
     setProactiveAudioReady(true);
@@ -630,10 +629,8 @@ export function useJasperWebSocket(): UseJasperReturn {
           case 'STATE_CHANGE':
             if (!['IDLE', 'LISTENING', 'PROCESSING', 'SPEAKING', 'ERROR'].includes(data.state)) break;
             // A real conversational turn takes priority over a standalone reading.
-            if (localSpeechAbortRef.current || localSpeechSourceRef.current) {
-              if (data.state === 'IDLE') break;
-              cancelLocalSpeech();
-            }
+            if (localSpeechAbortRef.current || localSpeechSourceRef.current) break;
+            if(data.state==='IDLE'&&pcmSourcesRef.current.size)break;
             setState(data.state as JasperState);
             break;
           case 'PRESENTATION_OPEN':
@@ -741,18 +738,19 @@ export function useJasperWebSocket(): UseJasperReturn {
                 text: data.text || ''
               }]);
             }
-            if (data.audioBase64 && !presentationResponse && !presentationOpenRef.current && !presentationNarratingRef.current) {
+            if (data.audioBase64 && !presentationResponse && !presentationNarratingRef.current) {
               if (localSpeechAbortRef.current || localSpeechSourceRef.current) cancelLocalSpeech();
-              playAudioChunk(data.audioBase64);
-            } else if (data.text && !presentationResponse && !presentationOpenRef.current && !presentationNarratingRef.current) {
+              void playAudioChunk(data.audioBase64);
+            } else if (data.text && !presentationResponse && !presentationNarratingRef.current) {
               speakTextRef.current(data.text);
             }
             break;
           }
           case 'LIVE_AUDIO_CHUNK':
-            if (data.audioBase64 && !presentationPendingRef.current && !presentationOpenRef.current && !presentationNarratingRef.current) {
+            if(data.audioBase64)liveVoiceTurnRef.current.receivedAudio();
+            if (data.audioBase64 && !presentationPendingRef.current && !presentationNarratingRef.current) {
               if (localSpeechAbortRef.current || localSpeechSourceRef.current) cancelLocalSpeech();
-              playAudioChunk(data.audioBase64);
+              void playAudioChunk(data.audioBase64);
               if (stateRef.current !== 'SPEAKING') {
                 setState('SPEAKING');
               }
@@ -761,6 +759,7 @@ export function useJasperWebSocket(): UseJasperReturn {
           case 'LIVE_TEXT_CHUNK':
             if (data.text) {
               const textChunk = data.text;
+              liveVoiceTurnRef.current.addText(textChunk);
 
 
               setMessages(prev => {
@@ -782,12 +781,15 @@ export function useJasperWebSocket(): UseJasperReturn {
               });
             }
             break;
-          case 'TURN_COMPLETE':
+          case 'TURN_COMPLETE': {
+            const voiceFallback=liveVoiceTurnRef.current.finish();
+            if(voiceFallback&&!presentationPendingRef.current&&!presentationNarratingRef.current)void speakTextRef.current(voiceFallback);
             if (presentationPendingRef.current) presentationPendingRef.current = false;
             currentMessageIdRef.current = null;
             userVoiceMessageIdRef.current = null;
             setTranscript('');
             break;
+          }
           case 'INTERRUPT':
             presentationPendingRef.current = false;
             stopAllAudio();
@@ -923,6 +925,8 @@ export function useJasperWebSocket(): UseJasperReturn {
         wsRef.current.close();
       }
       stopAllAudio();
+      if(audioContextRef.current)void audioContextRef.current.close().catch(()=>{});
+      audioContextRef.current=null;analyserRef.current=null;
       stopRecording(false);
     };
   }, [connect, stopAllAudio]);
@@ -931,11 +935,9 @@ export function useJasperWebSocket(): UseJasperReturn {
     const rememberGesture = () => {
       lastInteractionRef.current = Date.now();
       if (micAudioContextRef.current?.state === 'suspended') void micAudioContextRef.current.resume().catch(() => {});
-      if (!audioUnlockedRef.current) {
-        initAudioContext();
-        audioUnlockedRef.current = true;
-        setProactiveAudioReady(true);
-      }
+      initAudioContext();
+      const context=audioContextRef.current;
+      if(context)void ensureAudioRunning(context).then(running=>{audioUnlockedRef.current=running;if(running)audioBlockedRef.current=false;setProactiveAudioReady(running);});
     };
     document.addEventListener('pointerdown', rememberGesture, { passive: true });
     document.addEventListener('keydown', rememberGesture);
@@ -967,7 +969,7 @@ export function useJasperWebSocket(): UseJasperReturn {
     setMessages(prev => [...prev, { id: Date.now().toString(), sender: 'user', text }]);
     initAudioContext();
     if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
-      audioContextRef.current.resume();
+      void audioContextRef.current.resume().catch(() => {});
     }
     wsRef.current.send(JSON.stringify({ type: 'TEXT_COMMAND', text, sttMs: 0 }));
   }, [stopAllAudio, initAudioContext]);
@@ -1046,7 +1048,7 @@ export function useJasperWebSocket(): UseJasperReturn {
 
         if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !geminiLiveConnectedRef.current) return;
         // Evita feedback acústico: quando o assistente fala, pausa o streaming
-        const playing = stateRef.current === 'SPEAKING' || presentationOpenRef.current || presentationNarratingRef.current || !!localSpeechAbortRef.current || !!localSpeechSourceRef.current
+        const playing = stateRef.current === 'SPEAKING' || presentationPendingRef.current || presentationNarratingRef.current || !!localSpeechAbortRef.current || !!localSpeechSourceRef.current
           || (audioContextRef.current?.state === 'running' && nextPlayTimeRef.current > audioContextRef.current.currentTime);
         if (playing || wsRef.current.bufferedAmount > 256_000) return;
 
@@ -1252,6 +1254,7 @@ export function useJasperWebSocket(): UseJasperReturn {
     presentationOpen,
     presentationReady,
     closePresentation,
+    activateScene,
     openPresentation,
     setPresentationNarrating,
     authStatus,

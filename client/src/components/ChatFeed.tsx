@@ -1677,6 +1677,7 @@ const ChatFeed: React.FC<ChatFeedProps> = ({ messages, onApproveTerminal, onRead
                   {msg.notice && <div className="notice-heading"><Newspaper size={13} /><span>{msg.notice.article?.topic || (msg.notice.kind === 'clock' ? 'Agora' : 'Jasper por perto')}</span><time>{new Date(msg.notice.sentAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</time></div>}
                   <AssistantMarkdown text={textToDisplay} />
                   {msg.notice && <div className="notice-actions">{msg.notice.article && <a href={msg.notice.article.url} target="_blank" rel="noopener noreferrer">{msg.notice.article.source}<ExternalLink size={12} /></a>}{onReadNotice && <button onClick={() => onReadNotice(textToDisplay)}><Volume2 size={13} />Ouvir</button>}</div>}
+                  {!msg.notice && onReadNotice && textToDisplay && <div className="notice-actions"><button onClick={() => onReadNotice(textToDisplay)}><Volume2 size={13} />Ouvir resposta</button></div>}
                 </div>
               </>
             ) : (

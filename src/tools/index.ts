@@ -1,3 +1,4 @@
+import { listarDispositivos } from './devices.js';
 import { ligarPC, verificarPC, desligarPC } from './computer.js';
 import { pesquisarWeb, acessarSite, pesquisarImagens } from './web.js';
 import { enviarMensagem } from './messaging.js';
@@ -7,6 +8,7 @@ import { toggleDevice, getDeviceStatus } from './smarthome.js';
 import { executarTerminal, solicitarTerminalPorVoz, confirmarComandoTerminal } from './terminal.js';
 import { baixarMidia } from './media.js';
 import { ajustarPersonalidade, consultarPersonalidade, restaurarPersonalidadePadrao } from './personality.js';
+import { parsePresentation } from '../presentation/schema.js';
 
 /**
  * Declaração das ferramentas disponíveis para o modelo Google Gemini (Function Calling)
@@ -256,8 +258,26 @@ export const geminiToolDeclarations = [
     },
   },
   {
+    name: 'criar_apresentacao_visual',
+    description: 'Abre uma apresentação visual cinematográfica holográfica 3D, diagrama ou desenho explicativo na tela, narrada pelo Jasper.',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        title: { type: 'STRING', description: 'Título da apresentação (ex: Modelo 3D do Átomo de Carbono)' },
+        subtitle: { type: 'STRING', description: 'Subtítulo explicativo' },
+        kind: { type: 'STRING', description: 'Tipo da cena: model3d, diagram ou drawing' },
+        preset: { type: 'STRING', description: 'Preset 3D: atom, cyber_car, solar_system, flow_field, neural_network ou custom' },
+        element: { type: 'STRING', description: 'Elemento se for átomo (ex: carbon, hydrogen, oxygen, iron)' },
+        primaryColor: { type: 'STRING', description: 'Cor primária neon (#00f3ff)' },
+        narration: { type: 'STRING', description: 'Texto narrado pelo Jasper de 1 a 2 frases curtas (100 a 250 caracteres)' },
+        presentationJson: { type: 'STRING', description: 'Opcional: JSON completo para múltiplas etapas' },
+      },
+      required: ['title', 'kind', 'narration'],
+    },
+  },
+  {
     name: 'executar_terminal',
-    description: 'Solicita a execução de um comando no terminal Linux do usuário (listar arquivos, rodar scripts, consultar processos, git, etc). Todo comando exige confirmação do usuário antes de rodar: em conversa por voz, a ferramenta retorna status "aguardando_confirmacao" e você deve perguntar ao usuário se ele confirma, depois chamar confirmar_comando_terminal. Comandos destrutivos críticos (sudo, formatação, desligamento, rm na raiz) são bloqueados.',
+    description: 'Solicita a execução de um comando no terminal Linux do usuário (listar arquivos, rodar scripts, consultar processos, git, etc). Todo comando exige confirmação do usuário antes de rodar: em conversa por voz, a ferramenta retorna status "aguardando_confirmacao" e você deve perguntar ao usuário se ele confirma, a decisão é registrada pelo servidor, e confirmar_comando_terminal apenas consulta o estado. Comandos destrutivos críticos (sudo, formatação, desligamento, rm na raiz) são bloqueados.',
     parameters: {
       type: 'OBJECT',
       properties: {
@@ -271,21 +291,8 @@ export const geminiToolDeclarations = [
   },
   {
     name: 'confirmar_comando_terminal',
-    description: 'Registra a resposta verbal do usuário para o comando de terminal que está aguardando confirmação. Chame SOMENTE depois de ouvir o usuário responder. aprovado=true se ele disse sim/confirmo/pode executar; aprovado=false se ele negou ou cancelou. Retorna a saída do comando quando aprovado.',
-    parameters: {
-      type: 'OBJECT',
-      properties: {
-        aprovado: {
-          type: 'BOOLEAN',
-          description: 'true se o usuário autorizou a execução, false se negou.',
-        },
-        lembrar: {
-          type: 'BOOLEAN',
-          description: 'true se o usuário pediu para sempre permitir este tipo de comando sem perguntar novamente nesta sessão.',
-        },
-      },
-      required: ['aprovado'],
-    },
+    description: 'Consulta o estado de uma solicitação de terminal. Não aprova, nega ou executa comandos; a decisão depende da interface humana ou da transcrição explícita permitida pelo servidor.',
+    parameters: { type: 'OBJECT', properties: {}, required: [] },
   },
   {
     name: 'baixar_midia',
@@ -320,6 +327,15 @@ export const geminiToolDeclarations = [
       required: ['url'],
     },
   },
+  {
+    name: "listar_dispositivos",
+    description: "Lista todos os dispositivos registrados e autorizados na rede do JASPER.",
+    parameters: {
+      type: "OBJECT",
+      properties: {},
+      required: [],
+    },
+  },
 ];
 
 import { toolEvents } from '../events/toolEvents.js';
@@ -333,7 +349,8 @@ export interface ToolExecutionContext {
 }
 
 export async function executeToolByName(name: string, args: Record<string, any> = {}, ctx: ToolExecutionContext = {}): Promise<any> {
-  console.log(`🛠️ Executando Ferramenta: [${name}] com argumentos:`, JSON.stringify(args));
+  console.log(`🛠️ Executando Ferramenta: [${name}] com argumentos:`,
+    name === 'criar_apresentacao_visual' ? `{ apresentação: ${String(args.presentationJson || '').length} caracteres }` : JSON.stringify(args));
   const startTime = Date.now();
   toolEvents.emit('pipeline_action_start', { tool: name, args });
   let result: any;
@@ -429,7 +446,37 @@ export async function executeToolByName(name: string, args: Record<string, any> 
         result = { tableConfig: finalConfig, success: true, message: 'Tabela interativa gerada e renderizada com sucesso.' };
         break;
       }
-      case 'renderizar_video':
+      case 'criar_apresentacao_visual': {
+        let presentation;
+        if (args.presentationJson) {
+          presentation = parsePresentation(args.presentationJson);
+        } else {
+          presentation = parsePresentation({
+            title: args.title || 'Estúdio Visual Holográfico',
+            subtitle: args.subtitle || '',
+            steps: [
+              {
+                title: args.title || 'Modelo 3D',
+                narration: args.narration || 'Apresentação visual iniciada.',
+                kind: (args.kind as any) || 'model3d',
+                preset: (args.preset as any) || 'atom',
+                config: {
+                  element: args.element || 'carbon',
+                  primaryColor: args.primaryColor || '#00f3ff',
+                  accentColor: args.accentColor || '#ff007f',
+                },
+                parts: [],
+              },
+            ],
+          });
+        }
+        result = { success: true, presentation, message: 'Apresentação aberta. A interface vai narrar cada etapa; não repita a narração.' };
+        break;
+      }
+      case "listar_dispositivos":
+        result = await listarDispositivos();
+        break;
+      case "renderizar_video":
         result = { url: args.url, success: true };
         break;
       case 'executar_terminal':
@@ -438,7 +485,7 @@ export async function executeToolByName(name: string, args: Record<string, any> 
           : await executarTerminal(args.comando || '');
         break;
       case 'confirmar_comando_terminal':
-        result = await confirmarComandoTerminal(args.aprovado === true || args.aprovado === 'true', args.lembrar === true || args.lembrar === 'true');
+        result = await confirmarComandoTerminal();
         break;
       case 'baixar_midia':
         result = await baixarMidia(args.url || '', args.tipo || 'video');

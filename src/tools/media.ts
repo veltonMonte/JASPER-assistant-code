@@ -1,70 +1,33 @@
-import { exec } from 'child_process';
-import os from 'os';
-import path from 'path';
-import fs from 'fs';
-import axios from 'axios';
+import os from 'node:os';
+import path from 'node:path';
+import fs from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
+import { runProgram } from '../security/process.js';
+import { assertPublicHttpUrl, publicHttpGet } from '../security/netguard.js';
+
+const IMAGE_TYPES: Record<string, string> = { 'image/jpeg': 'jpg', 'image/png': 'png', 'image/gif': 'gif', 'image/webp': 'webp' };
 
 export async function baixarMidia(url: string, tipo: 'video' | 'foto'): Promise<any> {
-  return new Promise(async (resolve, reject) => {
-    try {
-      const downloadsDir = path.join(os.homedir(), 'Downloads', 'Jasper');
-      
-      // Criar a pasta caso não exista
-      if (!fs.existsSync(downloadsDir)) {
-        fs.mkdirSync(downloadsDir, { recursive: true });
-      }
-
-      if (tipo === 'foto') {
-        // Usa axios para baixar a imagem
-        const response = await axios({
-          url,
-          method: 'GET',
-          responseType: 'stream'
-        });
-
-        const extensionMatch = url.match(/\.([a-zA-Z0-9]+)(?:[\?#]|$)/);
-        const extension = extensionMatch ? extensionMatch[1] : 'jpg';
-        const filename = `imagem_${Date.now()}.${extension}`;
-        const filePath = path.join(downloadsDir, filename);
-
-        const writer = fs.createWriteStream(filePath);
-        response.data.pipe(writer);
-
-        writer.on('finish', () => resolve({
-          success: true,
-          message: `Foto baixada com sucesso e salva em: ${filePath}`,
-          filePath
-        }));
-        
-        writer.on('error', (err) => reject({
-          error: `Erro ao salvar a foto no disco: ${err.message}`
-        }));
-        
-      } else if (tipo === 'video') {
-        // Usa yt-dlp para baixar vídeos da internet
-        const outputPath = path.join(downloadsDir, '%(title)s.%(ext)s');
-        const command = `yt-dlp -o "${outputPath}" "${url}"`;
-
-        exec(command, (error, stdout, stderr) => {
-          if (error) {
-            reject({
-              error: `Erro ao baixar o vídeo. Certifique-se de que o yt-dlp está instalado. Detalhes: ${stderr || error.message}`
-            });
-            return;
-          }
-
-          resolve({
-            success: true,
-            message: `Vídeo baixado com sucesso na pasta: ${downloadsDir}`,
-            stdout: stdout
-          });
-        });
-      } else {
-        reject({ error: `Tipo desconhecido: ${tipo}. Escolha 'video' ou 'foto'.` });
-      }
-
-    } catch (err: any) {
-      reject({ error: `Erro na execução: ${err.message}` });
-    }
+  if (tipo !== 'video' && tipo !== 'foto') throw new Error("Tipo desconhecido. Escolha 'video' ou 'foto'.");
+  const target = await assertPublicHttpUrl(url);
+  const downloadsDir = path.join(os.homedir(), 'Downloads', 'Jasper');
+  if (tipo === 'foto') {
+    const response = await publicHttpGet(target.href, { timeoutMs: 15_000, maxBytes: 10 * 1024 * 1024, responseType: 'arraybuffer' });
+    const mime = String(response.headers['content-type'] || '').split(';')[0].trim().toLowerCase();
+    const extension = IMAGE_TYPES[mime];
+    if (!extension) throw new Error('A resposta não é uma imagem permitida (JPEG, PNG, GIF ou WebP).');
+    const bytes = Buffer.from(response.data);
+    if (!bytes.length || bytes.length > 10 * 1024 * 1024) throw new Error('Imagem vazia ou maior que o limite de 10 MB.');
+    await fs.mkdir(downloadsDir, { recursive: true });
+    const filePath = path.join(downloadsDir, `imagem_${Date.now()}_${randomUUID()}.${extension}`);
+    await fs.writeFile(filePath, bytes, { flag: 'wx' });
+    return { success: true, message: `Foto salva em: ${filePath}`, filePath };
+  }
+  await fs.mkdir(downloadsDir, { recursive: true });
+  const outputTemplate = path.join(downloadsDir, `video_${Date.now()}_${randomUUID()}.%(ext)s`);
+  const result = await runProgram('yt-dlp', ['-o', outputTemplate, '--no-playlist', '--max-filesize', '50M', '--socket-timeout', '15', '--retries', '1', '--', target.href], {
+    cwd: downloadsDir, timeoutMs: 600_000, maxBuffer: 1024 * 1024,
   });
+  if (!result.ok) throw new Error(`Não foi possível baixar o vídeo: ${result.stderr.slice(0, 500)}`);
+  return { success: true, message: `Vídeo salvo na pasta: ${downloadsDir}`, stdout: result.stdout.slice(0, 4000) };
 }

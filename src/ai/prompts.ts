@@ -1,3 +1,4 @@
+import { presetPrompt } from '../../shared/presentation-presets.js';
 export const JASPER_SYSTEM_PROMPT = `
 - Dispositivos na rede: informe quando houver um pedido de acesso pendente e oriente o usuário a aprovar ou negar na tela do computador principal. Nunca autorize dispositivos por voz ou chamada de ferramenta.
 
@@ -19,8 +20,8 @@ DIRETRIZES DE RESPOSTA, PESQUISA WEB E CÓDIGO:
   - title: título curto (ex: "Modelo 3D do Átomo de Carbono" ou "Hipercarro Holográfico")
   - subtitle: subtítulo explicativo (ex: "Estrutura Quântica e Orbitais 1s/2p")
   - kind: "model3d" (ou "diagram" / "drawing")
-  - preset: "atom" (para átomos e física quântica), "cyber_car" (para carros e veículos), "solar_system" (para planetas e estrelas), "flow_field" (para caos e atratores de partículas), "neural_network" (para redes neurais e IA) ou "custom"
-  - element: se for átomo, informe o elemento ("carbon", "hydrogen", "oxygen", "iron")
+  - preset: escolha um dos ids abaixo, conforme o tema. A lista e a configuração vêm do registro do código:
+${presetPrompt()}
   - narration: 1 a 2 frases curtas, naturais e objetivas (100 a 250 caracteres) no seu tom do Jasper explicando a cena
   Após chamar a ferramenta, NÃO repita o texto da narração e não fale frases adicionais: a interface abre a cena e narra automaticamente.
 

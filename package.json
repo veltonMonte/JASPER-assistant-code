@@ -2,11 +2,11 @@
   "name": "jasper-ai-assistant",
   "version": "1.0.0",
   "description": "JASPER - Assistente Pessoal de Voz e Inteligência Artificial Doméstico",
-  "main": "dist/server/server.js",
+  "main": "dist/src/server/server.js",
   "scripts": {
     "dev": "tsx watch src/server/server.ts",
     "build": "tsc",
-    "start": "node dist/server/server.js",
+    "start": "node dist/src/server/server.js",
     "test:router": "tsx src/agent/router.ts",
     "typecheck": "tsc --noEmit",
     "typecheck:client": "tsc --noEmit -p client",

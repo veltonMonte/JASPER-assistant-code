@@ -1843,3 +1843,10 @@ html, body, #root {
     animation: none !important;
   }
 }
+
+.scene-label { display: block; max-width: 150px; padding: 5px 8px; border: 1px solid #9cc8dc38; border-radius: 5px; background: #0a1724c9; color: #c3dfec; font: 10px/1.5 var(--font-display); text-align: center; white-space: pre-line; pointer-events: none; }
+.scene-loading { position: absolute; z-index: 4; top: 65px; left: 24px; color: #a4c8d8; font-size: 11px; pointer-events: none; }
+.scene-quality-controls { position: absolute; z-index: 5; right: 16px; bottom: 15px; display: flex; align-items: center; gap: 9px; color: #9cb9c9; font-size: 10px; }
+.scene-quality-controls button, .scene-quality-controls select { border: 1px solid #9cc8dc38; border-radius: 6px; background: #0c1722dc; color: #bed6e3; font: inherit; padding: 7px; }
+.scene-quality-controls label { display: flex; align-items: center; gap: 6px; }
+.scene-debug { position: absolute; z-index: 5; left: 15px; top: 58px; max-width: calc(100% - 30px); padding: 10px; border-radius: 7px; background: #03090eea; color: #a4d5c5; font: 9px/1.65 var(--font-mono); white-space: pre-line; pointer-events: none; }

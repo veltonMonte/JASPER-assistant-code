@@ -196,3 +196,19 @@ principal. O modelo não pode aprovar aparelhos ou comandos. No terminal,
 confirmações explícitas de voz são aceitas apenas quando o risco permite;
 comandos de alto risco exigem o botão e a revisão do comando literal. A opção
 de lembrar vale apenas para o mesmo comando de leitura, por 30 minutos.
+
+## Qualidade do Estúdio 3D (Fase 2)
+
+O Estúdio mantém o mesmo renderizador entre etapas. No controle **Qualidade**,
+escolha Leve, Equilibrada ou Alta; a preferência fica salva neste navegador.
+Para diagnóstico, abra o endereço do Jasper com `?debug=1&quality=high`
+(ou `medium`/`low`). O painel mostra FPS, pontos, recursos e ajustes automáticos.
+O modo leve limita a cena a 8 mil pontos e 30 FPS; o equilibrado a 25 mil;
+o alto a 60 mil. O limite inclui a poeira de fundo. Aparelhos lentos reduzem
+os pontos antes de reduzir a qualidade. Rótulos identificam as peças principais;
+há um esquema leve quando o navegador não consegue iniciar o WebGL.
+
+Os tipos de apresentação são compartilhados em `shared/`. Por isso, a compilação
+do servidor agora gera `dist/src/server/server.js`; `npm start` já usa esse caminho.
+Execute os comandos na raiz do projeto. O relatório e o roteiro de verificação
+estão em `docs/FASE-2.md`.

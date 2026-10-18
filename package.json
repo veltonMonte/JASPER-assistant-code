@@ -9,7 +9,8 @@
     "start": "node dist/server/server.js",
     "test:router": "tsx src/agent/router.ts",
     "typecheck": "tsc --noEmit",
-    "typecheck:client": "tsc --noEmit -p client"
+    "typecheck:client": "tsc --noEmit -p client",
+    "test:features": "node --import tsx --test --test-concurrency=1 tests/*.test.ts"
   },
   "keywords": [
     "ai",

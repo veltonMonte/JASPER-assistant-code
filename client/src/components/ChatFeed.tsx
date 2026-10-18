@@ -1,5 +1,7 @@
 import React, { useEffect, useRef, useState, useMemo, useId } from 'react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { type Components } from 'react-markdown';
+import { useDialogFocus } from '../hooks/useDialogFocus';
+import { prepareStreamingMarkdown } from '../lib/streamingMarkdown';
 import remarkGfm from 'remark-gfm';
 import {
   User, Bot, Zap, TrendingUp, TrendingDown,
@@ -8,7 +10,7 @@ import {
   Cpu, Brain, Activity, ChevronDown, ChevronUp, Clock, Globe, Image,
   Maximize2, Minimize2, ExternalLink, PieChart as PieIcon, Compass, Table as TableIcon,
   ArrowUpDown, Download, Filter, Trophy, Star, Award, Layers, Grid, FileSpreadsheet,
-  LayoutList
+  LayoutList, Volume2, Newspaper
 } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
@@ -32,11 +34,13 @@ export interface Message {
   durationMs?: number;
   output?: string;
   error?: string;
+  notice?: { kind: 'news' | 'question' | 'clock'; sentAt: string; article?: { title: string; url: string; source: string; topic: string; publishedAt: string } };
 }
 
 export interface ChatFeedProps {
   messages: Message[];
   onApproveTerminal?: (id: string, approved: boolean, customCommand?: string, remember?: boolean) => void;
+  onReadNotice?: (text: string) => void;
 }
 
 function isThinkingLine(line: string): boolean {
@@ -52,7 +56,7 @@ function isThinkingLine(line: string): boolean {
 const cleanText = (text: string) => {
   if (!text) return '';
   // Remove explicit <think>...</think> tags if model emits them
-  const cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+  const cleaned = text.replace(/<think>[\s\S]*?<\/think>/gi, '').replace(/<think>[\s\S]*$/gi, '').trim();
   return cleaned;
 };
 
@@ -962,8 +966,21 @@ const ChartComponent: React.FC<{ jsonStr: string }> = React.memo(({ jsonStr }) =
   );
 });
 
-const ImageGalleryWidget: React.FC<{ jsonStr: string }> = ({ jsonStr }) => {
+const StableImage = React.memo(({ image, thumbnail, title }: { image: string; thumbnail?: string; title: string }) => {
+  const [fallback, setFallback] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [loaded, setLoaded] = useState(false);
+  const source = fallback ? image : thumbnail || image;
+  if (failed || !source || !/^https?:\/\//i.test(source)) return <span className="image-unavailable"><Image size={20} /><span>Imagem indisponível</span></span>;
+  return <img src={source} alt={title} loading="lazy" decoding="async" className={loaded ? 'image-ready' : 'image-pending'} onLoad={() => setLoaded(true)} onError={() => {
+    if (!fallback && image && image !== source) { setFallback(true); setLoaded(false); }
+    else setFailed(true);
+  }} />;
+});
+
+const ImageGalleryWidget = React.memo(({ jsonStr }: { jsonStr: string }) => {
   const [selectedImage, setSelectedImage] = useState<any | null>(null);
+  const lightboxRef = useDialogFocus(!!selectedImage, () => setSelectedImage(null));
 
   try {
     const data = JSON.parse(jsonStr);
@@ -973,8 +990,8 @@ const ImageGalleryWidget: React.FC<{ jsonStr: string }> = ({ jsonStr }) => {
     if (!images || images.length === 0) {
       return (
         <div className="image-gallery-empty-card">
-          <Loader2 size={18} className="spin icon-loader" />
-          <span>Buscando resultados atuais na web...</span>
+          <Image size={18} />
+          <span>Nenhuma imagem encontrada para esta busca.</span>
         </div>
       );
     }
@@ -987,30 +1004,23 @@ const ImageGalleryWidget: React.FC<{ jsonStr: string }> = ({ jsonStr }) => {
               <Image size={16} />
             </div>
             <div className="gallery-header-text">
-              <span className="gallery-title">Galeria de Imagens</span>
+              <span className="gallery-title">Galeria de imagens</span>
               <span className="gallery-query">"{query}"</span>
             </div>
           </div>
-          <span className="gallery-count-badge">{images.length} fotos</span>
+          <span className="gallery-count-badge">{images.length} {images.length === 1 ? 'imagem' : 'imagens'}</span>
         </div>
 
         <div className="image-gallery-grid">
           {images.map((img: any, idx: number) => (
-            <div key={idx} className="image-grid-item" onClick={() => setSelectedImage(img)}>
-              <div className="image-thumb-container">
-                <img
-                  src={img.thumbnail || img.image}
-                  alt={img.title || query}
-                  loading="lazy"
-                  onError={(e) => {
-                    (e.target as HTMLElement).setAttribute('src', img.image);
-                  }}
-                />
+            <div key={`${img.image || img.thumbnail}-${idx}`} className="image-grid-item">
+              <button type="button" className="image-thumb-container" aria-label={`Ampliar ${img.title || query}`} onClick={() => setSelectedImage(img)}>
+                <StableImage key={img.image || img.thumbnail} thumbnail={img.thumbnail} image={img.image} title={img.title || query} />
                 <div className="image-hover-glass">
                   <Maximize2 size={20} className="icon-zoom" />
                   <span className="hover-title">{img.title}</span>
                 </div>
-              </div>
+              </button>
               <div className="image-item-footer">
                 <span className="item-title">{img.title || query}</span>
                 <a
@@ -1030,7 +1040,7 @@ const ImageGalleryWidget: React.FC<{ jsonStr: string }> = ({ jsonStr }) => {
 
         {selectedImage && (
           <div className="image-lightbox-backdrop" onClick={() => setSelectedImage(null)}>
-            <div className="image-lightbox-dialog" onClick={(e) => e.stopPropagation()}>
+            <div className="image-lightbox-dialog" ref={lightboxRef} role="dialog" aria-modal="true" aria-label="Visualizar imagem" tabIndex={-1} onClick={(e) => e.stopPropagation()}>
               <div className="lightbox-header">
                 <span className="lightbox-title">{selectedImage.title || query}</span>
                 <div className="lightbox-actions">
@@ -1042,13 +1052,13 @@ const ImageGalleryWidget: React.FC<{ jsonStr: string }> = ({ jsonStr }) => {
                   >
                     <ExternalLink size={14} /> Ver Original
                   </a>
-                  <button onClick={() => setSelectedImage(null)} className="btn-lightbox-close">
+                  <button onClick={() => setSelectedImage(null)} className="btn-lightbox-close" aria-label="Fechar imagem">
                     <X size={18} />
                   </button>
                 </div>
               </div>
               <div className="lightbox-image-wrapper">
-                <img src={selectedImage.image} alt={selectedImage.title || query} />
+                <StableImage key={selectedImage.image} image={selectedImage.image} title={selectedImage.title || query} />
               </div>
             </div>
           </div>
@@ -1058,7 +1068,7 @@ const ImageGalleryWidget: React.FC<{ jsonStr: string }> = ({ jsonStr }) => {
   } catch (err) {
     return <div className="image-gallery-error-card">Erro ao renderizar galeria de imagens.</div>;
   }
-};
+});
 
 const VideoPlayerWidget: React.FC<{ jsonStr: string }> = ({ jsonStr }) => {
   try {
@@ -1163,24 +1173,11 @@ const TerminalApprovalCard: React.FC<{
   const status = msg.approvalStatus || 'pending';
   const isPending = status === 'pending';
 
-  // Keyboard shortcut for approval (Enter = approve, Esc = deny)
+  // A aprovação exige foco no botão; Escape continua disponível para negar.
   useEffect(() => {
     if (!isPending || !isLatestPending) return;
-
     const handleKeyDown = (e: KeyboardEvent) => {
-      const targetTag = (e.target as HTMLElement)?.tagName?.toLowerCase();
-      if (targetTag === 'input' || targetTag === 'textarea') {
-        if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-          e.preventDefault();
-          onApproveTerminal?.(msg.id, true, isEditing ? editedCommand : undefined, rememberChoice);
-        }
-        return;
-      }
-
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        onApproveTerminal?.(msg.id, true, isEditing ? editedCommand : undefined, rememberChoice);
-      } else if (e.key === 'Escape') {
+      if (e.key === 'Escape') {
         e.preventDefault();
         onApproveTerminal?.(msg.id, false);
       }
@@ -1249,22 +1246,22 @@ const TerminalApprovalCard: React.FC<{
 
       {isPending ? (
         <>
-          <div className="terminal-approval-remember">
+          {riskLevel === 'safe' && !isEditing && <div className="terminal-approval-remember">
             <label className="remember-checkbox-label">
               <input
                 type="checkbox"
                 checked={rememberChoice}
                 onChange={(e) => setRememberChoice(e.target.checked)}
               />
-              <span>Lembrar decisão para comandos semelhantes nesta sessão</span>
+              <span>Permitir este mesmo comando de leitura por 30 minutos</span>
             </label>
-          </div>
+          </div>}
 
           <div className="terminal-approval-actions">
             <button
               onClick={() => onApproveTerminal?.(msg.id, true, isEditing ? editedCommand : undefined, rememberChoice)}
               className="btn-approve"
-              title="Permitir execução (Atalho: Enter)"
+              title="Permitir execução do comando exibido"
             >
               <Check size={15} /> Permitir
             </button>
@@ -1293,7 +1290,7 @@ const TerminalApprovalCard: React.FC<{
 
           <div className="terminal-approval-hint">
             <Keyboard size={13} />
-            <span>Pressione <b>Enter</b> para permitir, <b>Esc</b> para negar ou diga <i>"Sim, pode rodar"</i> por voz</span>
+            <span>{riskLevel === 'high' ? 'Revise o comando literal e use o botão Permitir.' : 'Use o botão Permitir ou diga “sim, execute”.'} Esc para negar.</span>
           </div>
         </>
       ) : (
@@ -1445,14 +1442,14 @@ const PipelineGroupCard: React.FC<{ actions: Message[] }> = ({ actions }) => {
         <div className="progress-shimmer"></div>
       </div>
 
-      <div className="pipeline-header" onClick={() => setIsOpen(!isOpen)}>
+      <div className="pipeline-header" role="button" tabIndex={0} aria-expanded={isOpen} aria-label="Mostrar ou ocultar atividade" onKeyDown={event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); setIsOpen(!isOpen); } }} onClick={() => setIsOpen(!isOpen)}>
         <div className="pipeline-header-left">
           <div className="pipeline-sparkle-badge">
             <Terminal size={13} className="hud-term-icon" />
           </div>
           <div className="pipeline-title-group">
             <span className="pipeline-hud-tag">EXEC.STREAM // LOG</span>
-            <span className="pipeline-title">Etapas de Raciocínio & Ferramentas</span>
+            <span className="pipeline-title">Atividade do Jasper</span>
           </div>
           <span className="pipeline-step-count">
             {actions.length} {actions.length === 1 ? 'ETAPA' : 'ETAPAS'}
@@ -1463,23 +1460,23 @@ const PipelineGroupCard: React.FC<{ actions: Message[] }> = ({ actions }) => {
           {isRunning && (
             <span className="pipeline-status-pill running">
               <span className="segmented-ring-spinner"></span>
-              <span>EXECUTANDO...</span>
+              <span>Em andamento</span>
             </span>
           )}
           {!isRunning && hasError && (
             <span className="pipeline-status-pill error">
-              <AlertCircle size={12} /> FALHA
+              <AlertCircle size={12} /> Falha
             </span>
           )}
           {!isRunning && !hasError && (
             <span className="pipeline-status-pill done">
-              <CheckCircle2 size={12} className="snap-check" /> CONCLUÍDO {totalDuration > 0 ? `[+${totalDuration}ms]` : ''}
+              <CheckCircle2 size={12} className="snap-check" /> Concluído {totalDuration > 0 ? `[+${totalDuration}ms]` : ''}
             </span>
           )}
 
-          <button className="btn-toggle-pipeline" aria-label="Toggle pipeline view">
+          <span className="btn-toggle-pipeline" aria-hidden="true">
             {isOpen ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
-          </button>
+          </span>
         </div>
       </div>
 
@@ -1530,11 +1527,80 @@ const PipelineGroupCard: React.FC<{ actions: Message[] }> = ({ actions }) => {
   );
 };
 
-const ChatFeed: React.FC<ChatFeedProps> = ({ messages, onApproveTerminal }) => {
+// Stable component identities preserve chart controls, loaded images and video playback.
+const MARKDOWN_COMPONENTS: Components = {
+  pre({ children }) { return <>{children}</>; },
+
+                      table({ children }) {
+                        return (
+                          <div className="custom-table-container">
+                            <table className="custom-markdown-table">{children}</table>
+                          </div>
+                        );
+                      },
+                      thead({ children }) {
+                        return <thead className="custom-thead">{children}</thead>;
+                      },
+                      tbody({ children }) {
+                        return <tbody className="custom-tbody">{children}</tbody>;
+                      },
+                      tr({ children }) {
+                        return <tr className="custom-tr">{children}</tr>;
+                      },
+                      th({ children }) {
+                        return <th className="custom-th">{children}</th>;
+                      },
+                      td({ children }) {
+                        return <td className="custom-td">{children}</td>;
+                      },
+                      code({ node, inline, className, children, ...props }: any) {
+                        const match = /language-(\w+)/.exec(className || '');
+                        const language = match ? match[1] : '';
+
+                        const isBlock = !!match || String(children).endsWith('\n');
+
+                        if (isBlock) {
+                          if (language === 'recharts') {
+                            return <ChartComponent jsonStr={String(children)} />;
+                          }
+                          if (language === 'table' || language === 'tabela' || language === 'json-table') {
+                            return <InteractiveTable jsonStr={String(children)} />;
+                          }
+                          if (language === 'images') {
+                            return <ImageGalleryWidget jsonStr={String(children)} />;
+                          }
+                          if (language === 'video') {
+                            return <VideoPlayerWidget jsonStr={String(children)} />;
+                          }
+                          if (['bash', 'sh', 'terminal', 'zsh', 'shell', 'cmd'].includes(language)) {
+                            const { command, output } = parseBashBlock(String(children));
+                            return <TerminalWindowWidget command={command} output={output} />;
+                          }
+                          return <CodeBlock className={className}>{children}</CodeBlock>;
+                        }
+                        return (
+                          <code className="inline-code" {...props}>
+                            {children}
+                          </code>
+                        );
+                      }
+};
+
+const AssistantMarkdown = React.memo(({ text }: { text: string }) => {
+  const prepared = useMemo(() => prepareStreamingMarkdown(text), [text]);
+  return <>
+    <ReactMarkdown remarkPlugins={MARKDOWN_PLUGINS} components={MARKDOWN_COMPONENTS}>{prepared.markdown}</ReactMarkdown>
+    {prepared.pending && <div className="media-loading" role="status"><Loader2 size={17} className="spin" /><span>Preparando {prepared.pending === 'images' ? 'imagens' : prepared.pending === 'recharts' ? 'gráfico' : 'conteúdo'}…</span></div>}
+  </>;
+});
+const MARKDOWN_PLUGINS = [remarkGfm];
+
+const ChatFeed: React.FC<ChatFeedProps> = ({ messages, onApproveTerminal, onReadNotice }) => {
   const feedRef = useRef<HTMLDivElement>(null);
+  const followLatest = useRef(true);
 
   useEffect(() => {
-    if (feedRef.current) {
+    if (feedRef.current && followLatest.current) {
       feedRef.current.scrollTop = feedRef.current.scrollHeight;
     }
   }, [messages]);
@@ -1571,7 +1637,7 @@ const ChatFeed: React.FC<ChatFeedProps> = ({ messages, onApproveTerminal }) => {
   }
 
   return (
-    <div className="chat-feed" ref={feedRef}>
+    <div className="chat-feed" ref={feedRef} onScroll={() => { const feed = feedRef.current; if (feed) followLatest.current = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 90; }}>
       {groupedFeed.map((item) => {
         if (item.type === 'pipeline') {
           return <PipelineGroupCard key={item.id} actions={item.actions} />;
@@ -1600,81 +1666,24 @@ const ChatFeed: React.FC<ChatFeedProps> = ({ messages, onApproveTerminal }) => {
                 <div className="assistant-msg-header hud-asst-header">
                   <div className="assistant-capsule-badge">
                     <span className="mini-orb-ring"></span>
-                    <Orb state="IDLE" />
+                    <Orb state="IDLE" animated={false} />
                   </div>
                   <div className="assistant-meta-block">
-                    <span className="assistant-name-tag">JASPER // QUANTUM</span>
-                    <span className="assistant-telemetry-pill">SEC_01 · VERIFIED</span>
+                    <span className="assistant-name-tag">JASPER</span>
+                    <span className="assistant-telemetry-pill">Assistente pessoal</span>
                   </div>
                 </div>
                 <div className="markdown-body">
-                  <ReactMarkdown
-                    remarkPlugins={[remarkGfm]}
-                    components={{
-                      table({ children }) {
-                        return (
-                          <div className="custom-table-container">
-                            <table className="custom-markdown-table">{children}</table>
-                          </div>
-                        );
-                      },
-                      thead({ children }) {
-                        return <thead className="custom-thead">{children}</thead>;
-                      },
-                      tbody({ children }) {
-                        return <tbody className="custom-tbody">{children}</tbody>;
-                      },
-                      tr({ children }) {
-                        return <tr className="custom-tr">{children}</tr>;
-                      },
-                      th({ children }) {
-                        return <th className="custom-th">{children}</th>;
-                      },
-                      td({ children }) {
-                        return <td className="custom-td">{children}</td>;
-                      },
-                      code({ node, inline, className, children, ...props }: any) {
-                        const match = /language-(\w+)/.exec(className || '');
-                        const language = match ? match[1] : '';
-
-                        const isBlock = !inline || !!match || String(children).includes('\n');
-
-                        if (isBlock) {
-                          if (language === 'recharts') {
-                            return <ChartComponent jsonStr={String(children)} />;
-                          }
-                          if (language === 'table' || language === 'tabela' || language === 'json-table') {
-                            return <InteractiveTable jsonStr={String(children)} />;
-                          }
-                          if (language === 'images') {
-                            return <ImageGalleryWidget jsonStr={String(children)} />;
-                          }
-                          if (language === 'video') {
-                            return <VideoPlayerWidget jsonStr={String(children)} />;
-                          }
-                          if (['bash', 'sh', 'terminal', 'zsh', 'shell', 'cmd'].includes(language)) {
-                            const { command, output } = parseBashBlock(String(children));
-                            return <TerminalWindowWidget command={command} output={output} />;
-                          }
-                          return <CodeBlock className={className}>{children}</CodeBlock>;
-                        }
-                        return (
-                          <code className="inline-code" {...props}>
-                            {children}
-                          </code>
-                        );
-                      }
-                    }}
-                  >
-                    {textToDisplay}
-                  </ReactMarkdown>
+                  {msg.notice && <div className="notice-heading"><Newspaper size={13} /><span>{msg.notice.article?.topic || (msg.notice.kind === 'clock' ? 'Agora' : 'Jasper por perto')}</span><time>{new Date(msg.notice.sentAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</time></div>}
+                  <AssistantMarkdown text={textToDisplay} />
+                  {msg.notice && <div className="notice-actions">{msg.notice.article && <a href={msg.notice.article.url} target="_blank" rel="noopener noreferrer">{msg.notice.article.source}<ExternalLink size={12} /></a>}{onReadNotice && <button onClick={() => onReadNotice(textToDisplay)}><Volume2 size={13} />Ouvir</button>}</div>}
                 </div>
               </>
             ) : (
               <div className="user-msg-bubble hud-user-bubble">
                 <span className="card-bracket tr"></span>
                 <div className="user-msg-header">
-                  <span className="user-tag">OPERATOR // SEC_01</span>
+                  <span className="user-tag">Você</span>
                 </div>
                 <div className="user-msg-content">{textToDisplay}</div>
                 {textToDisplay && (textToDisplay.includes('youtube.com/') || textToDisplay.includes('youtu.be/') || textToDisplay.includes('.mp4')) && (
@@ -1691,5 +1700,5 @@ const ChatFeed: React.FC<ChatFeedProps> = ({ messages, onApproveTerminal }) => {
   );
 };
 
-export default ChatFeed;
+export default React.memo(ChatFeed);
 

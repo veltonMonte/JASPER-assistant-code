@@ -1,5 +1,6 @@
 import dotenv from 'dotenv';
 import path from 'path';
+import { resolveApiCredentials } from '../security/credentials.js';
 
 dotenv.config();
 
@@ -27,12 +28,14 @@ export interface AppConfig {
   };
   security: {
     token: string;
+    generated: boolean;
+    allowedOrigins: string[];
   };
 }
 
 export const config: AppConfig = {
   port: parseInt(process.env.PORT || '3000', 10),
-  host: process.env.HOST || '0.0.0.0',
+  host: process.env.HOST || '127.0.0.1',
   env: process.env.NODE_ENV || 'development',
   gemini: {
     apiKey: process.env.GEMINI_API_KEY || '',
@@ -53,6 +56,7 @@ export const config: AppConfig = {
     path: path.resolve(process.cwd(), process.env.DATABASE_PATH || './jasper.db'),
   },
   security: {
-    token: process.env.API_SECRET_TOKEN || 'jasper-secure-local-token',
+    ...resolveApiCredentials(process.env.NODE_ENV || 'development', process.env.API_SECRET_TOKEN),
+    allowedOrigins: (process.env.ALLOWED_ORIGINS || '').split(',').map(value => value.trim()).filter(Boolean),
   },
 };

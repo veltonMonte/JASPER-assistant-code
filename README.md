@@ -131,3 +131,68 @@ Ao iniciar, o servidor exibirá os URLs de acesso:
 ## 🛡️ Licença e Expansão
 
 Projeto desenvolvido sob arquitetura modular limpa e tipada. Novas ferramentas podem ser adicionadas facilmente na pasta `src/tools/`.
+
+## Notícias e presença do Jasper
+
+Abra **Notícias e presença** pelo sino na navegação ou no painel **Seu Jasper**.
+Os assuntos iniciais são Fortaleza Esporte Clube, futebol e placares, política brasileira e cinema/trailers. Você pode adicionar ou remover interesses e salvar suas escolhas.
+
+- As fontes de notícias são consultadas a cada dois minutos. Manchetes sem fonte/data, antigas e repetidas não são anunciadas. O painel mantém links para as publicações.
+- O Jasper anuncia novidades quando você está disponível, sem interromper escuta, respostas, digitação ou confirmações de terminal. Política tem intervalo mínimo de uma hora entre avisos.
+- Perguntas e comentários sobre a hora aparecem em intervalos aleatórios de 25 a 60 minutos. É possível desligar cada tipo de fala.
+- O horário de silêncio inicial é das 23h às 8h, no fuso de Fortaleza, e pode ser alterado no painel.
+- A voz espontânea funciona com a página aberta e visível após uma interação. Use **Testar voz** para conferir o áudio. Placares dependem das notícias publicadas, sem promessa de cobertura lance a lance.
+- Preferências e controle de repetições ficam no SQLite, separados da memória de conversa. As consultas são feitas pelo servidor local; não exigem uma chave adicional de notícias.
+
+As mídias do chat preservam a visualização dos gráficos e o carregamento das imagens durante respostas em streaming. Blocos de mídia incompletos exibem um estado de preparação até estarem prontos.
+
+Validação das novas funções: `npm run test:features`. Para atualizar a versão servida: `npm run build` na raiz e `npm run build --prefix client`.
+
+As leituras de notícias, comentários ocasionais e o botão **Testar voz** usam a mesma voz Gemini configurada para a conversa. O servidor prepara o áudio completo como WAV (PCM16, mono, 24 kHz); o navegador decodifica o arquivo e o reproduz na velocidade original. Interromper a leitura também cancela uma geração ainda pendente. Se a voz natural estiver indisponível, a mensagem permanece no chat para tentar novamente.
+
+### Escuta automática
+
+Em um dispositivo autorizado, o microfone inicia automaticamente quando a conexão de voz fica pronta e retoma após uma reconexão. Na primeira utilização, permita o acesso ao microfone no navegador. O botão de microfone pausa a escuta; essa escolha permanece após recarregar até você ativá-la novamente.
+
+### Voz e presença
+
+Em **Seu Jasper → Voz e presença**, compare Orus, Algieba, Algenib e Charon, escolha o ritmo e use **Ouvir prévia** antes de aplicar. As preferências ficam salvas no banco local e valem para conversas e notícias. O perfil inicial usa Algenib, com timbre médio-grave, presença e fala formal, espontânea e ironia discreta. As opções do painel passam a definir a voz no lugar da configuração antiga `GEMINI_VOICE`.
+
+### Estúdio visual
+
+Peça por voz ou texto: **“Jasper, explique o fluxo de uma API em uma apresentação visual”** ou **“Crie uma representação 3D de um satélite”**. O Jasper abre o Estúdio visual em uma tela própria e apresenta de uma a seis etapas. Diagramas mostram blocos e conexões; objetos 3D podem ser girados e ampliados. Cada etapa recebe uma narração com a voz configurada, e a próxima fala é preparada enquanto a atual toca. Use os controles para pausar, repetir, avançar ou voltar à conversa. O ícone **Apresentação visual** reabre a última apresentação enquanto a página está aberta.
+
+Os objetos 3D são composições estilizadas de formas geométricas criadas para explicar ideias. Não são modelos técnicos exatos nem arquivos CAD. A geração visual requer a conexão Gemini; a narração usa o serviço de voz natural já configurado. Em navegadores sem WebGL, o texto da etapa continua disponível.
+
+## Acesso seguro à API (Fase 1)
+
+O servidor usa `127.0.0.1` por padrão. Para acesso pelo Tailscale, configure
+`HOST` com o endereço IP do Tailscale do notebook; não use `0.0.0.0` para essa
+finalidade. O agente remoto continua fora do escopo desta fase e não deve ser
+ativado antes das fases próprias de autenticação e execução remota.
+
+Somente `GET /api/health` é público. As demais rotas exigem
+`Authorization: Bearer <credencial>`, aceitando a sessão do dispositivo emitida
+pelo WebSocket ou `API_SECRET_TOKEN` para clientes de máquina. O navegador envia
+sua sessão automaticamente, sem armazenar o token global da API.
+
+Em produção, `API_SECRET_TOKEN` deve existir, ter no mínimo 32 caracteres e não
+ser o antigo valor de exemplo. Em desenvolvimento, se não houver um valor forte,
+o servidor gera uma credencial temporária e a exibe uma vez no console; ela
+muda ao reiniciar. Não coloque credenciais em URLs nem no código do cliente.
+
+Por padrão, HTTP e WebSocket aceitam a mesma origem. Para origens adicionais,
+configure `ALLOWED_ORIGINS` como uma lista de origens completas separadas por
+vírgula, por exemplo `https://jasper.example,http://127.0.0.1:5173`. A lista,
+quando definida, substitui a regra de mesma origem; inclua todos os endereços
+legítimos utilizados. Não são aceitos curingas. O proxy Vite identifica o IP
+original somente em desenvolvimento, a partir de uma conexão local e sua
+origem na porta 5173. Cabeçalhos de proxies genéricos nunca elevam uma conexão
+a computador principal. A identidade por dispositivo substitui essa mitigação
+na Fase 5.
+
+Novos dispositivos são aprovados exclusivamente pelos botões do computador
+principal. O modelo não pode aprovar aparelhos ou comandos. No terminal,
+confirmações explícitas de voz são aceitas apenas quando o risco permite;
+comandos de alto risco exigem o botão e a revisão do comando literal. A opção
+de lembrar vale apenas para o mesmo comando de leitura, por 30 minutos.

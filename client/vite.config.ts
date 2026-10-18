@@ -15,8 +15,20 @@ const apkPlugin = () => ({
   }
 });
 
+// Runtime hooks need a fresh React tree, and main.tsx must never call createRoot twice.
+const reloadRuntimeHooks = () => ({
+  name: 'reload-runtime-hooks',
+  handleHotUpdate(context: { file: string; server: { ws: { send: (message: { type: string; path: string }) => void } } }) {
+    const file = context.file.replace(/\\/g, '/');
+    if (file.includes('/src/hooks/') || file.endsWith('/src/main.tsx')) {
+      context.server.ws.send({ type: 'full-reload', path: '*' });
+      return [];
+    }
+  },
+});
+
 export default defineConfig({
-  plugins: [react(), apkPlugin()],
+  plugins: [react(), apkPlugin(), reloadRuntimeHooks()],
   build: {
     outDir: path.resolve(__dirname, '../public'),
     emptyOutDir: false,
@@ -28,6 +40,13 @@ export default defineConfig({
       '/ws': {
         target: 'ws://127.0.0.1:3000',
         ws: true,
+        configure(proxy) {
+          proxy.on('proxyReqWs', (proxyReq, req) => {
+            // The backend sees Vite as localhost; preserve the browser's real IP.
+            proxyReq.setHeader('x-jasper-client-ip', req.socket.remoteAddress || '');
+            proxyReq.setHeader('x-jasper-proxy', 'vite');
+          });
+        },
       },
       '/api': {
         target: 'http://127.0.0.1:3000',

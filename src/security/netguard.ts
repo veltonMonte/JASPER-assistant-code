@@ -25,7 +25,13 @@ async function destination(raw: string, resolver: Resolver) {
   if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error('Somente URLs públicas HTTP ou HTTPS são permitidas.');
   const hostname = url.hostname.replace(/^\[|\]$/g, '').toLowerCase().replace(/\.$/, '');
   if (hostname === 'localhost' || hostname.endsWith('.localhost') || hostname.endsWith('.local')) throw new Error('Endereço local não permitido.');
-  const addresses = isIP(hostname) ? [{ address: hostname, family: isIP(hostname) }] : await resolver(hostname);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let addresses: { address: string; family: number }[];
+  try {
+    addresses = isIP(hostname) ? [{ address: hostname, family: isIP(hostname) }] : await Promise.race([
+      resolver(hostname), new Promise<never>((_resolve, reject) => { timer = setTimeout(() => reject(new Error('O DNS não respondeu a tempo.')), 3000); }),
+    ]);
+  } finally { if (timer) clearTimeout(timer); }
   if (!addresses.length || addresses.some(item => !publicAddress(item.address))) throw new Error('Endereço privado ou reservado não permitido.');
   return { url, addresses };
 }

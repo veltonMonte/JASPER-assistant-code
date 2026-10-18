@@ -1,4 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
+import { AutomaticMicrophone } from '../lib/automaticMicrophone';
+import type { Presentation } from '../lib/presentation';
+
+export interface VoiceSettings { voice: string; pace: 'calm' | 'natural' | 'brisk' }
 
 export interface ChatMessage {
   id: string;
@@ -14,6 +18,7 @@ export interface ChatMessage {
   durationMs?: number;
   output?: string;
   error?: string;
+  notice?: { kind: 'news' | 'question' | 'clock'; sentAt: string; article?: { title: string; url: string; source: string; topic: string; publishedAt: string } };
 }
 
 export type JasperState = 'IDLE' | 'LISTENING' | 'PROCESSING' | 'SPEAKING' | 'ERROR';
@@ -27,9 +32,29 @@ export interface PersonalityConfig {
   empatia: number;
 }
 
+export interface AuthStatus {
+  isChecking: boolean;
+  isMaster: boolean;
+  isAuthorized: boolean;
+  isPending: boolean;
+  isDenied?: boolean;
+  deviceName?: string;
+}
+
+export interface PendingDeviceRequest {
+  id: string;
+  deviceId: string;
+  deviceName: string;
+  ip: string;
+  requestedAt: number;
+}
+
 export interface UseJasperReturn {
   state: JasperState;
   isConnected: boolean;
+  isMicActive: boolean;
+  isMicStarting: boolean;
+  isVoiceReady: boolean;
   messages: ChatMessage[];
   transcript: string;
   activeMic: 'womic' | 'notebook';
@@ -42,6 +67,32 @@ export interface UseJasperReturn {
   getAudioLevel: () => number;
   activeAlarm: { id: string, message: string } | null;
   stopAlarm: () => void;
+  readProactive: (text: string) => void;
+  previewVoice: (settings: VoiceSettings) => void;
+  voiceRequest: (path: string, init?: RequestInit) => Promise<Response>;
+  apiRequest: (path: string, init?: RequestInit) => Promise<Response>;
+  getNarrationContext: () => AudioContext;
+  proactiveAudioReady: boolean;
+  presentation: Presentation | null;
+  presentationOpen: boolean;
+  presentationReady: boolean;
+  closePresentation: () => void;
+  openPresentation: () => void;
+  setPresentationNarrating: (value: boolean) => void;
+  authStatus: AuthStatus;
+  pendingDeviceRequests: PendingDeviceRequest[];
+  requestDeviceAccess: (deviceName: string) => void;
+  resolveDeviceAccess: (id: string, approved: boolean) => void;
+}
+
+function createMessageId(): string {
+  if (typeof globalThis.crypto?.randomUUID === 'function') return globalThis.crypto.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (typeof globalThis.crypto?.getRandomValues === 'function') {
+    globalThis.crypto.getRandomValues(bytes);
+    return Array.from(bytes, byte => byte.toString(16).padStart(2, '0')).join('');
+  }
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 function isThinkingLine(line: string): boolean {
@@ -222,21 +273,57 @@ function float32ToInt16Base64(float32Array: Float32Array): string {
 }
 
 export function useJasperWebSocket(): UseJasperReturn {
+  const [authStatus, setAuthStatus] = useState<AuthStatus>({
+    isChecking: true,
+    isMaster: false,
+    isAuthorized: false,
+    isPending: false,
+    isDenied: false,
+  });
+  const [pendingDeviceRequests, setPendingDeviceRequests] = useState<PendingDeviceRequest[]>([]);
+
   const [state, setState] = useState<JasperState>('IDLE');
   const stateRef = useRef<JasperState>('IDLE');
   stateRef.current = state;
   const [isConnected, setIsConnected] = useState(false);
+  const [isMicActive, setIsMicActive] = useState(false);
+  const [isMicStarting, setIsMicStarting] = useState(false);
+  const [geminiLiveReady, setGeminiLiveReady] = useState(false);
+  const [microphoneEnabled, setMicrophoneEnabled] = useState(() => {
+    try { return localStorage.getItem('jasper_microphone_paused') !== 'true'; } catch { return true; }
+  });
+  const automaticMicRef = useRef(new AutomaticMicrophone());
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [proactiveAudioReady, setProactiveAudioReady] = useState(false);
+  const [presentation, setPresentation] = useState<Presentation | null>(null);
+  const [presentationOpen, setPresentationOpen] = useState(false);
+  const [presentationReady, setPresentationReady] = useState(false);
+  const presentationPendingRef = useRef(false);
+  const presentationOpenRef = useRef(false);
+  const presentationNarratingRef = useRef(false);
+  const presentationReadyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const setPresentationNarrating = useCallback((value: boolean) => { presentationNarratingRef.current = value; }, []);
+  const closePresentation = useCallback(() => {
+    if (presentationReadyTimerRef.current) clearTimeout(presentationReadyTimerRef.current);
+    presentationReadyTimerRef.current = null;
+    presentationOpenRef.current = false; setPresentationOpen(false); presentationNarratingRef.current = false;
+  }, []);
+  const openPresentation = useCallback(() => { presentationOpenRef.current = true; setPresentationReady(true); setPresentationOpen(true); }, []);
+  const audioUnlockedRef = useRef(false);
+  const lastInteractionRef = useRef(Date.now());
+  const receivedNoticesRef = useRef(new Set<string>());
+  const clientBusyRef = useRef(false);
+  clientBusyRef.current = messages.some(message => message.sender === 'terminal_approval' && (!message.approvalStatus || message.approvalStatus === 'pending'));
   const [transcript, setTranscript] = useState('');
   const [activeAlarm, setActiveAlarm] = useState<{ id: string, message: string } | null>(null);
   const [activeMic, setActiveMic] = useState<'womic' | 'notebook'>('notebook');
   const [personality, setPersonality] = useState<PersonalityConfig>({
-    humor: 60,
-    honestidade: 90,
-    sarcasmo: 40,
-    formalidade: 30,
-    verbosidade: 50,
-    empatia: 70,
+    humor: 45,
+    honestidade: 95,
+    sarcasmo: 55,
+    formalidade: 70,
+    verbosidade: 35,
+    empatia: 75,
   });
 
   const updatePersonality = useCallback((trait: keyof PersonalityConfig, value: number) => {
@@ -257,16 +344,26 @@ export function useJasperWebSocket(): UseJasperReturn {
   }, []);
   
   const wsRef = useRef<WebSocket | null>(null);
+  const voiceSessionTokenRef = useRef('');
   const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const geminiLiveConnectedRef = useRef(false);
   
   // Audio Playback
   const audioContextRef = useRef<AudioContext | null>(null);
+  const localSpeechAbortRef = useRef<AbortController | null>(null);
+  const localSpeechSourceRef = useRef<AudioBufferSourceNode | null>(null);
+  const speechGenerationRef = useRef(0);
   const activeAlarmAudioRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const nextPlayTimeRef = useRef<number>(0);
   const currentMessageIdRef = useRef<string | null>(null);
+  const userVoiceMessageIdRef = useRef<string | null>(null);
   
+  const micStartingRef = useRef(false);
+  const micGenerationRef = useRef(0);
+  const liveCaptureRef = useRef(false);
+  const discardRecordingRef = useRef(false);
+
   // Microphone Capture
   const mediaStreamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -274,7 +371,7 @@ export function useJasperWebSocket(): UseJasperReturn {
   const micAudioContextRef = useRef<AudioContext | null>(null);
 
   const initAudioContext = useCallback(() => {
-    if (!audioContextRef.current) {
+    if (!audioContextRef.current || audioContextRef.current.state === 'closed') {
       const ctx = new (window.AudioContext || (window as any).webkitAudioContext)({ sampleRate: 24000 });
       audioContextRef.current = ctx;
       const analyser = ctx.createAnalyser();
@@ -286,6 +383,11 @@ export function useJasperWebSocket(): UseJasperReturn {
       audioContextRef.current.resume();
     }
   }, []);
+
+  const getNarrationContext = useCallback((): AudioContext => {
+    initAudioContext();
+    return audioContextRef.current!;
+  }, [initAudioContext]);
 
   const playAudioChunk = useCallback((base64Audio: string) => {
     initAudioContext();
@@ -315,7 +417,19 @@ export function useJasperWebSocket(): UseJasperReturn {
     nextPlayTimeRef.current += buffer.duration;
   }, [initAudioContext]);
 
+  const cancelLocalSpeech = useCallback(() => {
+    speechGenerationRef.current++;
+    localSpeechAbortRef.current?.abort();
+    localSpeechAbortRef.current = null;
+    if (localSpeechSourceRef.current) {
+      localSpeechSourceRef.current.onended = null;
+      try { localSpeechSourceRef.current.stop(); localSpeechSourceRef.current.disconnect(); } catch {}
+      localSpeechSourceRef.current = null;
+    }
+  }, []);
+
   const stopAllAudio = useCallback(() => {
+    cancelLocalSpeech();
     if (audioContextRef.current) {
       audioContextRef.current.close();
       audioContextRef.current = null;
@@ -325,7 +439,7 @@ export function useJasperWebSocket(): UseJasperReturn {
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
       window.speechSynthesis.cancel();
     }
-  }, []);
+  }, [cancelLocalSpeech]);
 
   const stopAlarm = useCallback(() => {
     if (activeAlarmAudioRef.current) {
@@ -335,112 +449,60 @@ export function useJasperWebSocket(): UseJasperReturn {
     setActiveAlarm(null);
   }, []);
 
-  const [availableVoices, setAvailableVoices] = useState<SpeechSynthesisVoice[]>([]);
-
-  useEffect(() => {
-    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
-    const updateVoices = () => {
-      const vList = window.speechSynthesis.getVoices();
-      if (vList && vList.length > 0) {
-        setAvailableVoices(vList);
-      }
-    };
-    updateVoices();
-    window.speechSynthesis.onvoiceschanged = updateVoices;
-  }, []);
-
-  const speakText = useCallback((text: string) => {
-    if (typeof window === 'undefined') return;
-
-    let speechContent = text
-      .replace(/```[\s\S]*?```/g, 'Aqui está o código gerado.')
+  // All standalone readings use the same configured Gemini voice as conversation.
+  // Decode a complete WAV rather than concatenating browser/Translate TTS fragments.
+  const speakText = useCallback(async (text: string, preview?: VoiceSettings) => {
+    const speechContent = text
+      .replace(/```[\s\S]*?```/g, '')
       .replace(/`([^`]+)`/g, '$1')
       .replace(/<think>[\s\S]*?<\/think>/gi, '')
-      .replace(/[*#_~]/g, '')
-      .trim();
-
+      .replace(/[*#_~]/g, '').trim().slice(0, 1200);
     if (!speechContent) return;
-
-    // Check available high-quality voices
-    const voices = availableVoices.length > 0 ? availableVoices : (window.speechSynthesis?.getVoices() || []);
-    const ptVoices = voices.filter(v => v.lang.startsWith('pt') || v.lang.includes('BR'));
-    
-    const naturalVoice = ptVoices.find(v => {
-      const name = v.name.toLowerCase();
-      return (name.includes('google') || name.includes('natural') || name.includes('neural') || name.includes('online') || name.includes('helena') || name.includes('luciana') || name.includes('francisca') || name.includes('antonio'));
-    });
-
-    const isOnlyRoboticEspeak = ptVoices.length > 0 && ptVoices.every(v => v.name.toLowerCase().includes('espeak'));
-
-    // If no natural voice is found, or only eSpeak is available, use Google TTS Audio Fallback!
-    if (!naturalVoice || isOnlyRoboticEspeak) {
-      console.log('🤖 Apenas vozes robóticas locais detectadas (eSpeak). Utilizando Google TTS Cloud de alta qualidade.');
-      
-      if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-      setState('SPEAKING');
-
-      // Split text into safe chunks for Google Translate TTS (<200 chars per chunk, splitting on punctuation or spaces)
-      const sentences = speechContent.match(/[^.!?]+[.!?]*|.{1,150}(?:\s|$)/g) || [speechContent];
-      let currentIdx = 0;
-
-      const playNextTTSChunk = () => {
-        if (currentIdx >= sentences.length) {
-          setState('IDLE');
-          return;
-        }
-        
-        const chunk = sentences[currentIdx].trim();
-        if (!chunk) {
-          currentIdx++;
-          playNextTTSChunk();
-          return;
-        }
-
-        const url = `https://translate.google.com/translate_tts?ie=UTF-8&q=${encodeURIComponent(chunk)}&tl=pt-BR&client=tw-ob`;
-        const audio = new Audio(url);
-        
-        audio.onended = () => {
-          currentIdx++;
-          playNextTTSChunk();
-        };
-        
-        audio.onerror = () => {
-          console.warn('Google TTS falhou, tentando o próximo chunk...');
-          currentIdx++;
-          playNextTTSChunk();
-        };
-
-        audio.play().catch(err => {
-          console.warn('Erro no Google TTS:', err);
-          setState('IDLE');
-        });
+    cancelLocalSpeech();
+    const generation = speechGenerationRef.current;
+    const controller = new AbortController();
+    localSpeechAbortRef.current = controller;
+    const timeout = window.setTimeout(() => controller.abort(), 50_000);
+    setState('PROCESSING');
+    try {
+      initAudioContext();
+      const response = await fetch('/api/voice/speak', {
+        method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${voiceSessionTokenRef.current}` },
+        body: JSON.stringify({ text: speechContent, preview }), signal: controller.signal,
+      });
+      if (!response.ok || !response.headers.get('content-type')?.startsWith('audio/wav')) throw new Error('Voz natural indisponível.');
+      const wav = await response.arrayBuffer();
+      if (generation !== speechGenerationRef.current || controller.signal.aborted) return;
+      const context = audioContextRef.current;
+      if (!context || context.state === 'closed') throw new Error('Saída de áudio indisponível.');
+      const audio = await context.decodeAudioData(wav);
+      if (generation !== speechGenerationRef.current || controller.signal.aborted) return;
+      if (audio.numberOfChannels !== 1 || !audio.length) throw new Error('Formato de voz inválido.');
+      await context.resume();
+      if (generation !== speechGenerationRef.current || controller.signal.aborted) return;
+      const source = context.createBufferSource();
+      source.buffer = audio;
+      source.playbackRate.value = 1;
+      source.connect(analyserRef.current || context.destination);
+      localSpeechSourceRef.current = source;
+      localSpeechAbortRef.current = null;
+      source.onended = () => {
+        if (generation !== speechGenerationRef.current) return;
+        source.disconnect(); localSpeechSourceRef.current = null;
+        setState('IDLE');
       };
-
-      playNextTTSChunk();
-      return;
-    }
-
-    // Se temos uma voz local de alta qualidade (Google/Natural/Neural), usamos speechSynthesis nativo
-    if ('speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
-      
-      if (speechContent.length > 500) {
-        speechContent = speechContent.slice(0, 500) + '...';
-      }
-
-      const utterance = new SpeechSynthesisUtterance(speechContent);
-      utterance.lang = 'pt-BR';
-      utterance.rate = 1.0;
-      utterance.pitch = 0.98;
-      utterance.voice = naturalVoice || ptVoices[0];
-
-      utterance.onstart = () => setState('SPEAKING');
-      utterance.onend = () => setState('IDLE');
-      utterance.onerror = () => setState('IDLE');
-
-      window.speechSynthesis.speak(utterance);
-    }
-  }, [availableVoices]);
+      source.start(context.currentTime + .025);
+      setState('SPEAKING');
+    } catch {
+      if (generation !== speechGenerationRef.current) return;
+      localSpeechAbortRef.current = null;
+      setState('IDLE');
+      setMessages(previous => [...previous, {
+        id: `${Date.now()}-voice-unavailable`, sender: 'system',
+        text: 'Não consegui reproduzir a voz natural agora. A mensagem continua no chat; tente Ouvir novamente em instantes.',
+      }]);
+    } finally { window.clearTimeout(timeout); }
+  }, [cancelLocalSpeech, initAudioContext]);
 
   const getAudioLevel = useCallback(() => {
     if (!analyserRef.current) return 0;
@@ -453,6 +515,30 @@ export function useJasperWebSocket(): UseJasperReturn {
     return (sum / dataArray.length) / 255.0;
   }, []);
 
+  const speakTextRef = useRef(speakText);
+  speakTextRef.current = speakText;
+  const readProactive = useCallback((text: string) => {
+    if (stateRef.current !== 'IDLE') return;
+    initAudioContext();
+    audioUnlockedRef.current = true;
+    setProactiveAudioReady(true);
+    speakTextRef.current(text);
+  }, [initAudioContext]);
+
+  const apiRequest = useCallback((path: string, init: RequestInit = {}) => {
+    const headers = new Headers(init.headers);
+    headers.set('Authorization', `Bearer ${voiceSessionTokenRef.current}`);
+    return fetch(`/api/${path}`, { ...init, headers });
+  }, []);
+  const voiceRequest = useCallback((path: string, init: RequestInit = {}) => apiRequest(`voice/${path}`, init), [apiRequest]);
+  const previewVoice = useCallback((settings: VoiceSettings) => {
+    if (stateRef.current !== 'IDLE') return;
+    initAudioContext();
+    audioUnlockedRef.current = true;
+    setProactiveAudioReady(true);
+    void speakTextRef.current('À sua disposição. Vamos organizar o que realmente merece sua atenção. O restante pode esperar alguns segundos. Até o caos merece uma agenda.', settings);
+  }, [initAudioContext]);
+
   const connect = useCallback(() => {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const wsUrl = `${protocol}//${window.location.host}/ws`;
@@ -461,17 +547,125 @@ export function useJasperWebSocket(): UseJasperReturn {
     wsRef.current = ws;
 
     ws.onopen = () => {
+      setAuthStatus({ isChecking: true, isMaster: false, isAuthorized: false, isPending: false });
       setIsConnected(true);
-      console.log('WebSocket connected');
+      console.log("WebSocket connected");
+      let devId = localStorage.getItem("jasper_device_id");
+      if (!devId) {
+        devId = "dev_" + Math.random().toString(36).slice(2, 10);
+        localStorage.setItem("jasper_device_id", devId);
+      }
+      const token = localStorage.getItem("jasper_auth_token") || "";
+      ws.send(JSON.stringify({
+        type: "AUTH_CHECK",
+        deviceId: devId,
+        token: token,
+      }));
     };
 
     ws.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data);
         switch (data.type) {
+          case "AUTH_STATUS":
+            voiceSessionTokenRef.current = data.isAuthorized && typeof data.voiceToken === 'string' ? data.voiceToken : '';
+            if (data.isMaster) {
+              // Older versions saved a master credential in localStorage. The host
+              // is recognized from its address, so that credential is obsolete.
+              if (localStorage.getItem('jasper_is_master') === 'true') {
+                localStorage.removeItem('jasper_auth_token');
+              }
+              localStorage.removeItem('jasper_is_master');
+            }
+            setAuthStatus({
+              isChecking: false,
+              isMaster: !!data.isMaster,
+              isAuthorized: !!data.isAuthorized,
+              isPending: false,
+              deviceName: data.deviceName,
+            });
+            break;
+          case "DEVICE_ACCESS_REQUEST":
+            setPendingDeviceRequests(prev => [...prev.filter(r => r.id !== data.id), data]);
+            speakTextRef.current(`O dispositivo ${data.deviceName} está pedindo para entrar na nossa rede.`);
+            break;
+          case "DEVICE_ACCESS_PENDING":
+            setAuthStatus(prev => ({ ...prev, isPending: true, isDenied: false }));
+            break;
+          case "DEVICE_ACCESS_GRANTED":
+            if (data.deviceId !== localStorage.getItem("jasper_device_id")) break;
+            if (data.token) {
+              localStorage.setItem("jasper_auth_token", data.token);
+            }
+            if (data.deviceName) {
+              localStorage.setItem("jasper_device_name", data.deviceName);
+            }
+            setAuthStatus({
+              isChecking: false,
+              isMaster: false,
+              isAuthorized: true,
+              isPending: false,
+              isDenied: false,
+              deviceName: data.deviceName,
+            });
+            ws.send(JSON.stringify({ type: 'AUTH_CHECK', deviceId: data.deviceId, token: data.token }));
+            break;
+          case "DEVICE_ACCESS_DENIED":
+            setAuthStatus(prev => ({
+              ...prev,
+              isPending: false,
+              isAuthorized: false,
+              isDenied: true,
+            }));
+            break;
+          case "DEVICE_ACCESS_STATUS_UPDATE":
+            setPendingDeviceRequests(prev => prev.filter(r => r.id !== data.id));
+            break;
+          case "SYSTEM_ANNOUNCEMENT":
+            if (data.speak && data.text && !presentationOpenRef.current) {
+              speakTextRef.current(data.text);
+            }
+            break;
+
           case 'STATE_CHANGE':
+            if (!['IDLE', 'LISTENING', 'PROCESSING', 'SPEAKING', 'ERROR'].includes(data.state)) break;
+            // A real conversational turn takes priority over a standalone reading.
+            if (localSpeechAbortRef.current || localSpeechSourceRef.current) {
+              if (data.state === 'IDLE') break;
+              cancelLocalSpeech();
+            }
             setState(data.state as JasperState);
             break;
+          case 'PRESENTATION_OPEN':
+            if (data.presentation?.id && Array.isArray(data.presentation.steps)) {
+              presentationPendingRef.current = true;
+              presentationOpenRef.current = true;
+              if (presentationReadyTimerRef.current) clearTimeout(presentationReadyTimerRef.current);
+              const currentAudio = audioContextRef.current;
+              const remainingAudioMs = currentAudio?.state === 'running'
+                ? Math.max(0, (nextPlayTimeRef.current - currentAudio.currentTime) * 1000) : 0;
+              setPresentationReady(false);
+              setPresentation(data.presentation as Presentation);
+              setPresentationOpen(true);
+              // Let the last words already queued by Gemini finish before the lesson starts.
+              presentationReadyTimerRef.current = setTimeout(() => {
+                presentationReadyTimerRef.current = null;
+                if (!presentationOpenRef.current) return;
+                cancelLocalSpeech();
+                nextPlayTimeRef.current = 0;
+                setPresentationReady(true);
+              }, Math.max(180, remainingAudioMs + 120));
+            }
+            break;
+          case 'PROACTIVE_NOTIFICATION': {
+            const notice = data.notice;
+            if (!notice?.id || typeof notice.text !== 'string' || receivedNoticesRef.current.has(notice.id)) break;
+            receivedNoticesRef.current.add(notice.id);
+            if (receivedNoticesRef.current.size > 200) receivedNoticesRef.current.delete(receivedNoticesRef.current.values().next().value!);
+            setMessages(previous => [...previous, { id: notice.id, sender: 'assistant', text: notice.text, notice }]);
+            if (stateRef.current === 'IDLE' && !presentationOpenRef.current && !clientBusyRef.current && !document.hidden && Date.now() - lastInteractionRef.current > 10_000 && audioUnlockedRef.current) speakTextRef.current(notice.text);
+            break;
+          }
           case 'MIC_STATUS':
             if (data.activeMic === 'womic' || data.activeMic === 'notebook') {
               setActiveMic(data.activeMic);
@@ -484,6 +678,10 @@ export function useJasperWebSocket(): UseJasperReturn {
             break;
           case 'LIVE_STATUS':
             geminiLiveConnectedRef.current = !!data.connected;
+            if (!data.connected) presentationPendingRef.current = false;
+            setGeminiLiveReady(!!data.connected);
+            // Keep the capture device open through short Live reconnects.
+            // The audio callback pauses transmission until Gemini is ready again.
             break;
           case 'PIPELINE_ACTION': {
             setMessages(prev => {
@@ -521,6 +719,8 @@ export function useJasperWebSocket(): UseJasperReturn {
             break;
           }
           case 'ASSISTANT_RESPONSE': {
+            const presentationResponse = presentationPendingRef.current;
+            if (presentationPendingRef.current) presentationPendingRef.current = false;
             setTranscript('');
             if (data.transcribedText) {
               setMessages(prev => {
@@ -541,23 +741,27 @@ export function useJasperWebSocket(): UseJasperReturn {
                 text: data.text || ''
               }]);
             }
-            if (data.audioBase64) {
+            if (data.audioBase64 && !presentationResponse && !presentationOpenRef.current && !presentationNarratingRef.current) {
+              if (localSpeechAbortRef.current || localSpeechSourceRef.current) cancelLocalSpeech();
               playAudioChunk(data.audioBase64);
-            } else if (data.text) {
-              speakText(data.text);
+            } else if (data.text && !presentationResponse && !presentationOpenRef.current && !presentationNarratingRef.current) {
+              speakTextRef.current(data.text);
             }
             break;
           }
           case 'LIVE_AUDIO_CHUNK':
-            if (data.audioBase64) {
+            if (data.audioBase64 && !presentationPendingRef.current && !presentationOpenRef.current && !presentationNarratingRef.current) {
+              if (localSpeechAbortRef.current || localSpeechSourceRef.current) cancelLocalSpeech();
               playAudioChunk(data.audioBase64);
-              setState('SPEAKING');
+              if (stateRef.current !== 'SPEAKING') {
+                setState('SPEAKING');
+              }
             }
             break;
           case 'LIVE_TEXT_CHUNK':
             if (data.text) {
               const textChunk = data.text;
-              setTranscript(prev => cleanTextMonologue(prev + textChunk));
+
 
               setMessages(prev => {
                 const newMsgs = [...prev];
@@ -565,12 +769,12 @@ export function useJasperWebSocket(): UseJasperReturn {
                   const idx = newMsgs.findIndex(m => m.id === currentMessageIdRef.current);
                   if (idx >= 0) {
                     const rawCombined = newMsgs[idx].text + textChunk;
-                    const cleaned = cleanTextMonologue(rawCombined);
+                    const cleaned = rawCombined;
                     newMsgs[idx] = { ...newMsgs[idx], text: cleaned };
                     return newMsgs;
                   }
                 }
-                const cleanedChunk = cleanTextMonologue(textChunk);
+                const cleanedChunk = textChunk;
                 const newId = Date.now().toString() + '-assistant';
                 currentMessageIdRef.current = newId;
                 newMsgs.push({ id: newId, sender: 'assistant', text: cleanedChunk });
@@ -579,10 +783,13 @@ export function useJasperWebSocket(): UseJasperReturn {
             }
             break;
           case 'TURN_COMPLETE':
+            if (presentationPendingRef.current) presentationPendingRef.current = false;
             currentMessageIdRef.current = null;
+            userVoiceMessageIdRef.current = null;
             setTranscript('');
             break;
           case 'INTERRUPT':
+            presentationPendingRef.current = false;
             stopAllAudio();
             break;
           case 'ALARM_TRIGGER':
@@ -642,13 +849,22 @@ export function useJasperWebSocket(): UseJasperReturn {
             break;
           case 'LIVE_TRANSCRIPT':
             if (data.transcript) {
+              presentationPendingRef.current = false;
               setTranscript(data.transcript);
+              if (!userVoiceMessageIdRef.current) userVoiceMessageIdRef.current = createMessageId();
+              const id = userVoiceMessageIdRef.current;
+              setMessages(previous => {
+                const existing = previous.find(message => message.id === id);
+                return existing ? previous.map(message => message.id === id ? { ...message, text: data.transcript } : message)
+                  : [...previous, { id, sender: 'user', text: data.transcript }];
+              });
             }
             break;
           case 'TERMINAL_APPROVAL_STATUS_UPDATE':
             setMessages(prev => prev.map(m => {
               if (m.id === data.id) {
-                return {
+
+  return {
                   ...m,
                   approvalStatus: data.approved ? (data.customCommand ? 'edited' : 'approved') : 'denied',
                   executedCommand: data.customCommand || m.command,
@@ -674,10 +890,13 @@ export function useJasperWebSocket(): UseJasperReturn {
     };
 
     ws.onclose = () => {
+      voiceSessionTokenRef.current = '';
       setIsConnected(false);
+      setAuthStatus({ isChecking: true, isMaster: false, isAuthorized: false, isPending: false });
       geminiLiveConnectedRef.current = false;
+      setGeminiLiveReady(false);
       stopAllAudio();
-      stopRecording();
+      stopRecording(false);
       console.log('WebSocket disconnected. Reconnecting in 3s...');
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
       reconnectTimeoutRef.current = setTimeout(() => connect(), 3000);
@@ -692,32 +911,75 @@ export function useJasperWebSocket(): UseJasperReturn {
     };
     document.body.addEventListener('click', unlockAudio, { once: true });
     document.body.addEventListener('touchstart', unlockAudio, { once: true });
-  }, [playAudioChunk, stopAllAudio, initAudioContext]);
+  }, [playAudioChunk, stopAllAudio, initAudioContext, cancelLocalSpeech]);
 
   useEffect(() => {
     connect();
     return () => {
       if (reconnectTimeoutRef.current) clearTimeout(reconnectTimeoutRef.current);
+      if (presentationReadyTimerRef.current) clearTimeout(presentationReadyTimerRef.current);
       if (wsRef.current) {
         wsRef.current.onclose = null;
         wsRef.current.close();
       }
       stopAllAudio();
-      stopRecording();
+      stopRecording(false);
     };
   }, [connect, stopAllAudio]);
 
+  useEffect(() => {
+    const rememberGesture = () => {
+      lastInteractionRef.current = Date.now();
+      if (micAudioContextRef.current?.state === 'suspended') void micAudioContextRef.current.resume().catch(() => {});
+      if (!audioUnlockedRef.current) {
+        initAudioContext();
+        audioUnlockedRef.current = true;
+        setProactiveAudioReady(true);
+      }
+    };
+    document.addEventListener('pointerdown', rememberGesture, { passive: true });
+    document.addEventListener('keydown', rememberGesture);
+    return () => { document.removeEventListener('pointerdown', rememberGesture); document.removeEventListener('keydown', rememberGesture); };
+  }, [initAudioContext]);
+
+  useEffect(() => {
+    if (!isConnected) return;
+    const sendPresence = () => {
+      const focused = document.activeElement as HTMLInputElement | null;
+      const typing = !!focused && ['INPUT', 'TEXTAREA'].includes(focused.tagName) && !!focused.value?.trim();
+      const modalOpen = !!document.querySelector('[role="dialog"][aria-modal="true"], [role="alertdialog"]');
+      if (wsRef.current?.readyState === WebSocket.OPEN) wsRef.current.send(JSON.stringify({
+        type: 'CLIENT_PRESENCE', visible: !document.hidden, canSpeak: audioUnlockedRef.current,
+        busy: stateRef.current !== 'IDLE' || typing || modalOpen || clientBusyRef.current || !!activeAlarm,
+        activeAt: lastInteractionRef.current,
+      }));
+    };
+    sendPresence();
+    const timer = window.setInterval(sendPresence, 10_000);
+    document.addEventListener('visibilitychange', sendPresence);
+    return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', sendPresence); };
+  }, [isConnected, state, proactiveAudioReady, activeAlarm]);
+
   const sendText = useCallback((text: string) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    presentationPendingRef.current = false;
+    stopAllAudio();
     setMessages(prev => [...prev, { id: Date.now().toString(), sender: 'user', text }]);
     initAudioContext();
     if (audioContextRef.current && audioContextRef.current.state === 'suspended') {
       audioContextRef.current.resume();
     }
     wsRef.current.send(JSON.stringify({ type: 'TEXT_COMMAND', text, sttMs: 0 }));
-  }, []);
+  }, [stopAllAudio, initAudioContext]);
 
-  const stopRecording = useCallback(() => {
+  const stopRecording = useCallback((submit = true) => {
+    micGenerationRef.current++;
+    micStartingRef.current = false;
+    discardRecordingRef.current = !submit;
+    const wasLive = liveCaptureRef.current;
+    liveCaptureRef.current = false;
+    setIsMicActive(false);
+    setIsMicStarting(false);
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
     }
@@ -733,11 +995,21 @@ export function useJasperWebSocket(): UseJasperReturn {
       micAudioContextRef.current.close();
       micAudioContextRef.current = null;
     }
-    setState('IDLE');
+    if (submit && wasLive && wsRef.current?.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: 'SPEECH_ENDED' }));
+      setState('PROCESSING');
+    } else if (!submit || !mediaRecorderRef.current) {
+      setState('IDLE');
+    }
   }, []);
 
   const startLiveStreaming = useCallback(async () => {
+    if (micStartingRef.current || mediaStreamRef.current) return;
+    micStartingRef.current = true;
+    setIsMicStarting(true);
+    const generation = ++micGenerationRef.current;
     try {
+      if (!navigator.mediaDevices?.getUserMedia) throw new Error('Abra o Jasper em localhost ou HTTPS para liberar o microfone.');
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: { 
           echoCancellation: true, 
@@ -745,16 +1017,26 @@ export function useJasperWebSocket(): UseJasperReturn {
           autoGainControl: true 
         } 
       });
+      if (generation !== micGenerationRef.current) { stream.getTracks().forEach(track => track.stop()); return; }
       mediaStreamRef.current = stream;
+      discardRecordingRef.current = false;
+      setIsMicActive(true);
       const AudioCtx = window.AudioContext || (window as any).webkitAudioContext;
       const micCtx = new AudioCtx();
       micAudioContextRef.current = micCtx;
       if (micCtx.state === 'suspended') {
-        await micCtx.resume();
+        // Browser autoplay policies can keep resume() pending until a gesture.
+        // Do not block microphone setup while the audio context waits.
+        void micCtx.resume().catch(() => {});
       }
+      if (generation !== micGenerationRef.current) return;
       const inputSampleRate = micCtx.sampleRate || 48000;
+      liveCaptureRef.current = true;
+      stream.getAudioTracks().forEach(track => track.addEventListener('ended', () => {
+        if (mediaStreamRef.current === stream) stopRecording(false);
+      }, { once: true }));
       const source = micCtx.createMediaStreamSource(stream);
-      const processor = micCtx.createScriptProcessor(4096, 1, 1);
+      const processor = micCtx.createScriptProcessor(2048, 1, 1);
       
       processor.onaudioprocess = (e) => {
         // Silencia a saída do buffer para que o som do microfone não saia nos alto-falantes
@@ -762,9 +1044,11 @@ export function useJasperWebSocket(): UseJasperReturn {
           e.outputBuffer.getChannelData(ch).fill(0);
         }
 
-        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+        if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN || !geminiLiveConnectedRef.current) return;
         // Evita feedback acústico: quando o assistente fala, pausa o streaming
-        if (stateRef.current === 'SPEAKING') return;
+        const playing = stateRef.current === 'SPEAKING' || presentationOpenRef.current || presentationNarratingRef.current || !!localSpeechAbortRef.current || !!localSpeechSourceRef.current
+          || (audioContextRef.current?.state === 'running' && nextPlayTimeRef.current > audioContextRef.current.currentTime);
+        if (playing || wsRef.current.bufferedAmount > 256_000) return;
 
         const inputData = e.inputBuffer.getChannelData(0);
         const base64Audio = downsampleAndConvertToInt16Base64(inputData, inputSampleRate, 16000, 1.0);
@@ -777,19 +1061,38 @@ export function useJasperWebSocket(): UseJasperReturn {
       source.connect(processor);
       processor.connect(micCtx.destination);
       audioProcessorRef.current = processor;
-      setState('LISTENING');
+      setIsMicStarting(false);
+      // Capture stays armed while the server reports whether someone is actually speaking.
     } catch (err: any) {
+      if (generation !== micGenerationRef.current) return;
       console.error('Error starting live streaming', err);
-      if (err.name === 'NotAllowedError' || err.name === 'SecurityError') {
-        alert("🎤 Microfone bloqueado pelo Android. \n\n1. Vá nas Configurações do Android > Aplicativos > Jasper > Permissões e libere o Microfone.\n\n2. Se o erro persistir, o WebView exige HTTPS para liberar áudio.");
-      } else {
-        alert("Erro no microfone: " + (err.message || "desconhecido"));
+      stopRecording(false);
+      setMessages(previous => [...previous, {
+        id: createMessageId(), sender: 'system',
+        text: err.name === 'NotAllowedError' || err.name === 'SecurityError'
+          ? 'Permita o acesso ao microfone no navegador e toque no botão de voz para ativar a escuta automática.'
+          : `Não consegui iniciar o microfone. ${err.message || 'Confira se ele está conectado e tente novamente.'}`,
+      }]);
+      throw err;
+    } finally {
+      if (generation === micGenerationRef.current) {
+        micStartingRef.current = false;
+        setIsMicStarting(false);
       }
-      setState('ERROR');
     }
-  }, []);
+  }, [stopRecording]);
+
+  useEffect(() => {
+    // A temporary blob recording must give way to live capture when it recovers.
+    if (geminiLiveReady && microphoneEnabled && mediaRecorderRef.current?.state === 'recording') {
+      stopRecording(false);
+    }
+  }, [geminiLiveReady, microphoneEnabled, stopRecording]);
 
   const startBlobRecording = useCallback(async () => {
+    if (micStartingRef.current || mediaStreamRef.current) return;
+    micStartingRef.current = true;
+    const generation = ++micGenerationRef.current;
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ 
         audio: { 
@@ -798,8 +1101,12 @@ export function useJasperWebSocket(): UseJasperReturn {
           autoGainControl: true 
         } 
       });
+      if (generation !== micGenerationRef.current) { stream.getTracks().forEach(track => track.stop()); return; }
       mediaStreamRef.current = stream;
-      const mediaRecorder = new MediaRecorder(stream);
+      discardRecordingRef.current = false;
+      setIsMicActive(true);
+      const supportedMime = ['audio/webm;codecs=opus', 'audio/ogg;codecs=opus', 'audio/mp4'].find(type => MediaRecorder.isTypeSupported(type));
+      const mediaRecorder = new MediaRecorder(stream, supportedMime ? { mimeType: supportedMime } : undefined);
       mediaRecorderRef.current = mediaRecorder;
       const chunks: Blob[] = [];
 
@@ -808,10 +1115,13 @@ export function useJasperWebSocket(): UseJasperReturn {
       };
 
       mediaRecorder.onstop = () => {
+        if (mediaRecorderRef.current === mediaRecorder) mediaRecorderRef.current = null;
+        if (discardRecordingRef.current || generation !== micGenerationRef.current - 1 || !chunks.length) return;
+        setState('PROCESSING');
         const reader = new FileReader();
-        reader.readAsDataURL(new Blob(chunks, { type: 'audio/webm' }));
+        reader.readAsDataURL(new Blob(chunks, { type: mediaRecorder.mimeType || supportedMime || chunks[0].type }));
         reader.onloadend = () => {
-          if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+          if (!discardRecordingRef.current && generation === micGenerationRef.current - 1 && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
             wsRef.current.send(JSON.stringify({
               type: 'VOICE_AUDIO_BLOB',
               audioBase64: reader.result
@@ -823,28 +1133,57 @@ export function useJasperWebSocket(): UseJasperReturn {
       mediaRecorder.start();
       setState('LISTENING');
     } catch (err: any) {
+      if (generation !== micGenerationRef.current) return;
       console.error('Error starting blob recording', err);
       if (err.name === 'NotAllowedError' || err.name === 'SecurityError') {
         alert("🎤 Microfone bloqueado pelo Android. \n\n1. Vá nas Configurações do Android > Aplicativos > Jasper > Permissões e libere o Microfone.\n\n2. Se o erro persistir, o WebView exige HTTPS para liberar áudio.");
       } else {
         alert("Erro no microfone: " + (err.message || "desconhecido"));
       }
+      stopRecording(false);
       setState('ERROR');
+    } finally {
+      if (generation === micGenerationRef.current) micStartingRef.current = false;
     }
-  }, []);
+  }, [stopRecording]);
+
+  useEffect(() => {
+    const resumeMicrophone = () => {
+      void automaticMicRef.current.resume({
+        enabled: microphoneEnabled && typeof navigator.mediaDevices?.getUserMedia === 'function', connected: isConnected, authorized: authStatus.isAuthorized,
+        liveReady: geminiLiveReady, visible: !document.hidden,
+        capturing: !!mediaStreamRef.current || micStartingRef.current,
+      }, startLiveStreaming);
+    };
+    resumeMicrophone();
+    const recoveryTimer = window.setInterval(resumeMicrophone, 3000);
+    document.addEventListener('visibilitychange', resumeMicrophone);
+    return () => {
+      window.clearInterval(recoveryTimer);
+      document.removeEventListener('visibilitychange', resumeMicrophone);
+    };
+  }, [microphoneEnabled, isConnected, authStatus.isAuthorized, geminiLiveReady, isMicActive, startLiveStreaming]);
 
   const toggleMic = useCallback(() => {
-    if (state === 'LISTENING') {
+    if (mediaStreamRef.current || micStartingRef.current) {
+      setMicrophoneEnabled(false);
+      try { localStorage.setItem('jasper_microphone_paused', 'true'); } catch {}
       stopRecording();
     } else {
+      if (wsRef.current?.readyState !== WebSocket.OPEN || !authStatus.isAuthorized) return;
+      setMicrophoneEnabled(true);
+      try { localStorage.removeItem('jasper_microphone_paused'); } catch {}
+      automaticMicRef.current.allowRetry();
       stopAllAudio();
-      if (geminiLiveConnectedRef.current) {
-        startLiveStreaming();
-      } else {
-        startBlobRecording();
-      }
+      initAudioContext();
+      userVoiceMessageIdRef.current = null;
+      setTranscript('');
+      if (geminiLiveConnectedRef.current) void automaticMicRef.current.resume({
+        enabled: true, connected: true, authorized: true, liveReady: true, visible: true, capturing: false,
+      }, startLiveStreaming);
+      else void startBlobRecording();
     }
-  }, [state, stopRecording, stopAllAudio, startLiveStreaming, startBlobRecording]);
+  }, [authStatus.isAuthorized, stopRecording, stopAllAudio, initAudioContext, startLiveStreaming, startBlobRecording]);
 
   const sendTerminalApproval = useCallback((id: string, approved: boolean, customCommand?: string, remember?: boolean) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
@@ -862,9 +1201,35 @@ export function useJasperWebSocket(): UseJasperReturn {
     }));
   }, []);
 
+  const requestDeviceAccess = useCallback((deviceName: string) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    const deviceId = localStorage.getItem("jasper_device_id") || ("dev_" + Math.random().toString(36).slice(2, 10));
+    localStorage.setItem("jasper_device_id", deviceId);
+    localStorage.setItem("jasper_device_name", deviceName);
+    setAuthStatus(prev => ({ ...prev, isPending: true, isDenied: false }));
+    wsRef.current.send(JSON.stringify({
+      type: "REQUEST_DEVICE_ACCESS",
+      deviceId,
+      deviceName,
+    }));
+  }, []);
+
+  const resolveDeviceAccess = useCallback((id: string, approved: boolean) => {
+    if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
+    wsRef.current.send(JSON.stringify({
+      type: "RESOLVE_DEVICE_ACCESS",
+      id,
+      approved,
+    }));
+    setPendingDeviceRequests(prev => prev.filter(r => r.id !== id));
+  }, []);
+
   return {
     state,
     isConnected,
+    isMicActive,
+    isMicStarting,
+    isVoiceReady: geminiLiveReady,
     messages,
     transcript,
     activeMic,
@@ -876,6 +1241,22 @@ export function useJasperWebSocket(): UseJasperReturn {
     toggleMic,
     getAudioLevel,
     activeAlarm,
-    stopAlarm
+    stopAlarm,
+    readProactive,
+    previewVoice,
+    voiceRequest,
+    apiRequest,
+    getNarrationContext,
+    proactiveAudioReady,
+    presentation,
+    presentationOpen,
+    presentationReady,
+    closePresentation,
+    openPresentation,
+    setPresentationNarrating,
+    authStatus,
+    pendingDeviceRequests,
+    requestDeviceAccess,
+    resolveDeviceAccess,
   };
 }

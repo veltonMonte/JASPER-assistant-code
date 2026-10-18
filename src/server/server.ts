@@ -7,13 +7,22 @@ import { dbManager } from '../database/database.js';
 import routes from './routes.js';
 import { jasperWsServer } from './websocket.js';
 import { scheduler } from './scheduler.js';
+import { proactiveService } from '../proactive/runtime.js';
+import { isAllowedOrigin } from '../security/origin.js';
 
 const app = express();
 
 // Middlewares
-app.use(cors());
+app.use((req, res, next) => {
+  if (!isAllowedOrigin(req.header('origin'), req.header('host'), req.protocol, config.security.allowedOrigins)) {
+    res.status(403).json({ error: 'Origem não permitida.' }); return;
+  }
+  next();
+});
+app.use(cors((req, callback) => callback(null, { origin: typeof req.headers.origin === 'string' ? req.headers.origin : false })));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+app.use('/api', routes);
 
 // Servir arquivos estáticos do Web Client / PWA no Celular
 const publicDir = path.resolve(process.cwd(), 'public');
@@ -26,9 +35,6 @@ app.use(express.static(publicDir, {
   }
 }));
 
-// Rotas da API REST
-app.use('/api', routes);
-
 // Rota de fallback para a SPA Web
 app.get('*', (req, res) => {
   res.sendFile(path.join(publicDir, 'index.html'));
@@ -38,39 +44,40 @@ app.get('*', (req, res) => {
 async function bootstrap() {
   try {
     console.log('🚀 Inicializando Servidor Central do JASPER...');
+    if (config.security.generated) console.log(`Token temporário da API para esta execução de desenvolvimento: ${config.security.token}`);
     
     // 1. Inicializa Banco de Dados SQLite
     await dbManager.init();
 
     // 2. Inicializa o agendador de alarmes e tarefas
     scheduler.start();
+    try {
+      await proactiveService.init();
+      proactiveService.start();
+    } catch (error: any) {
+      console.warn('Notícias proativas indisponíveis:', error.message);
+    }
 
-    const tryListen = (port: number) => {
-      const server = http.createServer(app);
+    const server = http.createServer(app);
+    server.on('error', (err: NodeJS.ErrnoException) => {
+      if (err.code === 'EADDRINUSE') {
+        console.error(`❌ O Jasper já está usando a porta ${config.port}. Feche a instância anterior antes de iniciar outra.`);
+      } else {
+        console.error('❌ Erro no servidor HTTP:', err);
+      }
+      process.exit(1);
+    });
 
-      server.on('error', (err: any) => {
-        if (err.code === 'EADDRINUSE') {
-          console.warn(`⚠️ Porta ${port} ocupada. Tentando porta ${port + 1}...`);
-          tryListen(port + 1);
-        } else {
-          console.error('❌ Erro no servidor HTTP:', err);
-        }
-      });
+    server.listen(config.port, config.host, () => {
+      jasperWsServer.init(server);
 
-      server.listen(port, config.host, () => {
-        // Inicializa o WebSocketServer apenas quando a porta foi confirmada
-        jasperWsServer.init(server);
-
-        console.log(`\n==================================================`);
-        console.log(`🤖 JASPER AI Personal Assistant ON-LINE`);
-        console.log(`🌐 Servidor HTTP:  http://${config.host}:${port}`);
-        console.log(`📡 WebSocket:      ws://${config.host}:${port}/ws`);
-        console.log(`📱 Acesso Celular: http://<IP_DO_NOTEBOOK>:${port}`);
-        console.log(`==================================================\n`);
-      });
-    };
-
-    tryListen(config.port);
+      console.log(`\n==================================================`);
+      console.log(`🤖 JASPER AI Personal Assistant ON-LINE`);
+      console.log(`🌐 Servidor HTTP:  http://${config.host}:${config.port}`);
+      console.log(`📡 WebSocket:      ws://${config.host}:${config.port}/ws`);
+      console.log(`📱 Acesso Celular: http://<IP_DO_NOTEBOOK>:${config.port}`);
+      console.log(`==================================================\n`);
+    });
   } catch (error: any) {
     console.error('❌ Erro fatal durante a inicialização do JASPER:', error.message);
     process.exit(1);

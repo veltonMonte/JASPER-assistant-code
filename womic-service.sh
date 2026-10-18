@@ -11,24 +11,8 @@ MICCLIENT_BIN="$SCRIPT_DIR/micclient-x86_64.AppImage"
 BRIDGE_PID=""
 MICCLIENT_PID=""
 
-# Descobre o microfone físico padrão do notebook
-find_notebook_mic() {
-  local cur
-  cur=$(pactl get-default-source 2>/dev/null || true)
-  if [ -n "$cur" ] && [[ "$cur" != *"womic"* ]] && [[ "$cur" != *"Loopback"* ]] && [[ "$cur" != *"aloop"* ]]; then
-    echo "$cur"
-    return
-  fi
-  local mic
-  mic=$(pactl list short sources 2>/dev/null | grep -iE 'sofhdadsp.*source' | awk '{print $2}' | head -n1)
-  if [ -z "$mic" ]; then
-    mic=$(pactl list short sources 2>/dev/null | grep 'alsa_input' | grep -v -iE 'loopback|womic|aloop' | tail -n1 | awk '{print $2}')
-  fi
-  if [ -z "$mic" ]; then
-    mic="alsa_input.pci-0000_00_1f.3-platform-skl_hda_dsp_generic.HiFi__hw_sofhdadsp_6__source"
-  fi
-  echo "$mic"
-}
+# Roteia somente microfones dos navegadores, preservando capturas de tela e transmissão.
+source "$SCRIPT_DIR/womic-routing.sh"
 
 DEFAULT_MIC=$(find_notebook_mic)
 echo "🎙️ Microfone padrão do notebook detectado: $DEFAULT_MIC"
@@ -57,25 +41,6 @@ setup_womic_nodes() {
   if ! pactl list short sinks 2>/dev/null | grep -q "womic_mic"; then
     pactl load-module module-null-sink sink_name=womic_mic sink_properties=device.description="WOMic" 2>/dev/null || true
   fi
-}
-
-# Move todos os fluxos de gravação ativos (navegador, etc) para uma fonte
-move_active_recording_streams() {
-  local target_source="$1"
-  for stream_id in $(pactl list short source-outputs 2>/dev/null | awk '{print $1}'); do
-    pactl move-source-output "$stream_id" "$target_source" 2>/dev/null || true
-  done
-
-  # Garante ligação direta no PipeWire para navegadores (Firefox/Chrome)
-  for in_port in $(pw-link -i 2>/dev/null | grep -iE 'Firefox:input|Chromium:input|chrome:input' || true); do
-    if [ "$target_source" = "womic_mic.monitor" ]; then
-      if [[ "$in_port" == *"_FL" ]]; then
-        pw-link "womic_mic:monitor_FL" "$in_port" 2>/dev/null || true
-      else
-        pw-link "womic_mic:monitor_FR" "$in_port" 2>/dev/null || true
-      fi
-    fi
-  done
 }
 
 start_audio_bridge() {

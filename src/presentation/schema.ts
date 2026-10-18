@@ -1,3 +1,4 @@
+import { parseSceneSpec } from './scene-schema.js';
 import { randomUUID } from 'node:crypto';
 
 import type { PresentationPart, PresentationNode, PresentationLink, DrawingElement, PresentationStep, Presentation } from '../../shared/presentation-types.js';
@@ -22,7 +23,7 @@ const paint = (value: unknown): string => value === 'none' ? 'none' : color(valu
 export function parsePresentation(input: unknown): Presentation {
   let source: unknown = input;
   if (typeof source === 'string') {
-    if (source.length > 32_000) return fail('conteúdo grande demais');
+    if (source.length > 180_000) return fail('conteúdo grande demais');
     try { source = JSON.parse(source.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '')); }
     catch { return fail('JSON'); }
   }
@@ -34,9 +35,14 @@ export function parsePresentation(input: unknown): Presentation {
     const title = str(step.title, 100, 'título da etapa');
     const narration = str(step.narration, 850, 'narração da etapa');
     if (step.kind === 'model3d') {
+      if(step.scenePatch!==undefined)return fail('alterações devem usar a ferramenta de edição da cena ativa');
+      if(step.scene!==undefined){
+        if(step.preset!==undefined||step.parts!==undefined)return fail('cena livre não pode misturar peças ou preset legado');
+        return {title,narration,kind:'model3d',scene:parseSceneSpec(step.scene)};
+      }
       const rawParts = Array.isArray(step.parts) ? step.parts : [];
       const preset = step.preset === undefined
-        ? (rawParts.length ? 'custom' : inferPreset(title))
+        ? 'custom'
         : getPresetDefinition(step.preset).id;
       const config = parsePresetConfig(preset, step.config);
       if (rawParts.length === 0 && preset === 'custom') return fail('o modelo deve ter de 1 a 48 peças ou um preset reconhecido');

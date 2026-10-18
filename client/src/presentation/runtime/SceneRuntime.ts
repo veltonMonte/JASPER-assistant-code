@@ -1,3 +1,4 @@
+import { sceneFraming } from './framing';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
@@ -6,6 +7,7 @@ import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js'
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { CSS2DObject, CSS2DRenderer } from 'three/addons/renderers/CSS2DRenderer.js';
 import type { PresentationStep } from '../../../../shared/presentation-types';
+import { compileScene } from '../scene/SceneCompiler';
 import { builderFor } from '../presets/registry';
 import type { BuilderResult } from '../presets/types';
 import { AdaptiveQuality, QUALITY_PROFILES, type QualityTier } from './quality';
@@ -55,6 +57,9 @@ export class SceneRuntime {
   private latestFps = 0;
   private latestFrameMs = 0;
   private latestWorst = 0;
+  private autoRotatePreference = !matchMedia('(prefers-reduced-motion: reduce)').matches;
+  private publishAfterRender=false;
+  private labelNearDistance=.8;
 
   constructor(private host: HTMLElement, tier: QualityTier, private callbacks: { onStats: (stats: SceneStats) => void; onError: (error: unknown) => void; onLoading: (value: boolean) => void }) {
     if (typeof ResizeObserver === 'undefined' || typeof IntersectionObserver === 'undefined') throw new Error('Este navegador precisa do esquema visual leve.');
@@ -88,15 +93,16 @@ export class SceneRuntime {
     if (this.disposed) return;
     this.currentStep = step; this.generation.abort(); this.generation = new AbortController();
     const signal = this.generation.signal;
-    if (this.subject) { this.scene.remove(this.subject.group); this.subject.dispose(); this.subject = null; }
     if (this.pendingGroup) { this.scene.remove(this.pendingGroup); disposeObject(this.pendingGroup); }
-    this.labels = []; this.clouds = [];
-    const group = new THREE.Group(); this.pendingGroup = group; this.scene.add(group);
+
+    const group = new THREE.Group(); this.pendingGroup = group;
     this.loading = true; this.callbacks.onLoading(true); this.invalidate();
     const start = performance.now();
     try {
-      const result = await builderFor(step.preset || 'custom')({ group, config: step.config || {}, quality: QUALITY_PROFILES[this.quality.tier], tier: this.quality.tier, signal, parts: step.parts });
+      const result = step.scene ? await compileScene(step.scene,{group,quality:QUALITY_PROFILES[this.quality.tier],signal}) : await builderFor(step.preset || 'custom')({ group, config: step.config || {}, quality: QUALITY_PROFILES[this.quality.tier], tier: this.quality.tier, signal, parts: step.parts });
       if (signal.aborted || this.disposed) { result.dispose(); return; }
+      if(this.subject){this.scene.remove(this.subject.group);this.subject.dispose();}
+      this.labels=[];this.clouds=[];this.scene.add(group);
       this.pendingGroup = null; this.subject = result; this.generationMs = performance.now() - start;
       group.traverse(object => { if (object instanceof THREE.Points && object.material instanceof THREE.ShaderMaterial) this.clouds.push(object as Cloud); });
       for (const label of limitLabels(result.labels, this.quality.tier)) {
@@ -105,8 +111,19 @@ export class SceneRuntime {
         this.labels.push({ object, world: new THREE.Vector3(), projected: new THREE.Vector3() });
       }
       const bounds = new THREE.Box3().setFromObject(group), center = bounds.getCenter(new THREE.Vector3());
-      const radius = Math.max(3.8, bounds.getSize(new THREE.Vector3()).length() * .95);
-      this.camera.position.copy(center).add(new THREE.Vector3(radius * .85, radius * .45, radius * 1.2)); this.camera.lookAt(center); this.controls.target.copy(center);
+      if(bounds.isEmpty()||!Number.isFinite(bounds.max.length()))throw new Error('A cena não contém geometria visível.');
+      const framing=sceneFraming(bounds.getSize(new THREE.Vector3()).length(),this.camera.aspect,this.camera.fov);
+      const {radius,distance}=framing;
+      this.camera.near=framing.near;this.camera.far=framing.far;this.camera.updateProjectionMatrix();
+      this.labelNearDistance=framing.labelNear;
+      this.scene.fog=new THREE.FogExp2(0x070b10,step.scene?framing.fogDensity:.018);
+      const view=step.scene?.metadata?.view;
+      const direction=view==='top'?new THREE.Vector3(0,1,.0001):view==='front'?new THREE.Vector3(0,0,1):new THREE.Vector3(.85,.55,1.2).normalize();
+      this.camera.up.set(0,view==='top'?0:1,view==='top'?-1:0);
+      this.camera.position.copy(center).addScaledVector(direction,distance);this.camera.lookAt(center);this.controls.target.copy(center);
+      this.controls.minDistance=Math.max(1e-7,radius*.1);this.controls.maxDistance=distance*8;
+      this.controls.autoRotate=view==='top'?false:this.autoRotatePreference;
+      this.publishAfterRender=true;this.windowStart=0;this.frameSum=0;this.frameCount=0;this.worst=0;this.latestFps=0;this.latestFrameMs=0;this.latestWorst=0;
       this.applyDrawRange(); this.loading = false; this.callbacks.onLoading(false); this.publishStats(); this.invalidate();
     } catch (error) {
       if (signal.aborted || this.disposed) return;
@@ -120,7 +137,7 @@ export class SceneRuntime {
     if (this.currentStep) void this.setSubject(this.currentStep);
   }
 
-  setAutoRotate(value: boolean): void { this.controls.autoRotate = value; this.invalidate(); }
+  setAutoRotate(value: boolean): void { this.autoRotatePreference=value; this.controls.autoRotate = value; this.invalidate(); }
 
   private buildEnvironment(): void {
     this.environment.add(this.rings); this.scene.add(this.environment);
@@ -203,9 +220,10 @@ export class SceneRuntime {
         if (this.composer) this.composer.render(); else this.renderer.render(this.scene, this.camera);
         for (const label of this.labels) {
           label.object.getWorldPosition(label.world); label.projected.copy(label.world).project(this.camera);
-          label.object.element.hidden = label.projected.z < -1 || label.projected.z > 1 || label.world.distanceToSquared(this.camera.position) < .64;
+          label.object.element.hidden = label.projected.z < -1 || label.projected.z > 1 || label.world.distanceToSquared(this.camera.position) < this.labelNearDistance**2;
         }
         this.labelRenderer.render(this.scene, this.camera); this.dirty = false;
+        if(this.publishAfterRender){this.publishAfterRender=false;this.publishStats();}
         this.frameCount++; this.frameSum += frameMs; this.worst = Math.max(this.worst, frameMs);
       }
       if (!this.windowStart) this.windowStart = now;

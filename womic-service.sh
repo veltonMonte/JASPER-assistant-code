@@ -9,24 +9,16 @@ set -u
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MICCLIENT_BIN="$SCRIPT_DIR/micclient-x86_64.AppImage"
 BRIDGE_PID=""
+CAPTURE_PID=""
+BRIDGE_DIR=""
 MICCLIENT_PID=""
 
 # Roteia somente microfones dos navegadores, preservando capturas de tela e transmissão.
 source "$SCRIPT_DIR/womic-routing.sh"
+source "$SCRIPT_DIR/womic-bridge.sh"
 
 DEFAULT_MIC=$(find_notebook_mic)
 echo "🎙️ Microfone padrão do notebook detectado: $DEFAULT_MIC"
-
-# Descobre dinamicamente o dispositivo ALSA Loopback
-find_loopback_device() {
-  local card_num
-  card_num=$(awk '/Loopback/ {print $1; exit}' /proc/asound/cards 2>/dev/null || true)
-  if [ -n "$card_num" ]; then
-    echo "plughw:${card_num},1"
-  else
-    echo "plughw:CARD=Loopback,DEV=1"
-  fi
-}
 
 # Notifica o backend do JASPER sobre a alteração do microfone
 notify_backend() {
@@ -41,40 +33,6 @@ setup_womic_nodes() {
   if ! pactl list short sinks 2>/dev/null | grep -q "womic_mic"; then
     pactl load-module module-null-sink sink_name=womic_mic sink_properties=device.description="WOMic" 2>/dev/null || true
   fi
-}
-
-start_audio_bridge() {
-  pkill -f "arecord.*Loopback" 2>/dev/null || true
-  pkill -f "pacat -p.*womic_mic" 2>/dev/null || true
-  
-  local loopback_dev
-  loopback_dev=$(find_loopback_device)
-  echo "🔗 Iniciando bridge de áudio: $loopback_dev -> PipeWire womic_mic..."
-  
-  nohup arecord -D "$loopback_dev" -f S16_LE -r 48000 -c 1 -q 2>/dev/null | \
-    pacat -p --raw --format=s16le --rate=48000 --channels=1 -d womic_mic >/dev/null 2>&1 &
-  BRIDGE_PID=$!
-  
-  sleep 0.5
-  pactl set-default-source womic_mic.monitor 2>/dev/null || true
-  move_active_recording_streams "womic_mic.monitor"
-  notify_backend "womic"
-  echo "✅ Áudio do WO Mic roteado com sucesso para o sistema e aplicativos!"
-}
-
-stop_audio_bridge() {
-  if [ -n "$BRIDGE_PID" ]; then
-    kill "$BRIDGE_PID" 2>/dev/null || true
-    BRIDGE_PID=""
-  fi
-  pkill -f "arecord.*Loopback" 2>/dev/null || true
-  pkill -f "pacat -p.*womic_mic" 2>/dev/null || true
-  
-  DEFAULT_MIC=$(find_notebook_mic)
-  pactl set-default-source "$DEFAULT_MIC" 2>/dev/null || true
-  move_active_recording_streams "$DEFAULT_MIC"
-  notify_backend "notebook"
-  echo "🔙 Microfone do notebook restaurado ($DEFAULT_MIC)."
 }
 
 # Varre dinamicamente todas as sub-redes ativas em busca do WO Mic (porta 8125)
@@ -126,6 +84,7 @@ for net in get_subnets():
 }
 
 cleanup() {
+  trap - SIGINT SIGTERM EXIT
   echo "🛑 Encerrando serviço WO Mic..."
   if [ -n "$MICCLIENT_PID" ]; then
     kill "$MICCLIENT_PID" 2>/dev/null || true
@@ -139,8 +98,19 @@ trap cleanup SIGINT SIGTERM EXIT
 setup_womic_nodes
 
 PREV_TARGET_IP="${1:-}"
+WAITING_FOR_DRIVER=0
 
 while true; do
+  if ! find_loopback_device >/dev/null; then
+    if [ "$WAITING_FOR_DRIVER" = "0" ]; then
+      echo "⚠️ WO Mic indisponível: carregue o driver snd-aloop com o instalador de áudio. Usando o microfone do notebook."
+      stop_audio_bridge
+      WAITING_FOR_DRIVER=1
+    fi
+    sleep 5
+    continue
+  fi
+  WAITING_FOR_DRIVER=0
   TARGET_IP="$PREV_TARGET_IP"
   
   if [ -z "$TARGET_IP" ] || ! nc -z -w 1 "$TARGET_IP" 8125 2>/dev/null; then
@@ -160,7 +130,15 @@ while true; do
     MICCLIENT_PID=$!
     
     sleep 1
-    start_audio_bridge
+    if ! start_audio_bridge; then
+      echo "⚠️ A ponte do WO Mic não iniciou. Mantendo o microfone do notebook."
+      kill "$MICCLIENT_PID" 2>/dev/null || true
+      wait "$MICCLIENT_PID" 2>/dev/null || true
+      MICCLIENT_PID=""
+      stop_audio_bridge
+      sleep 5
+      continue
+    fi
     
     # Aguarda o processo do micclient
     wait "$MICCLIENT_PID" 2>/dev/null || true

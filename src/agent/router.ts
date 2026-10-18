@@ -57,7 +57,7 @@ export class IntentRouter {
         return {
           handledDirectly: true,
           intentName: 'TERMINAL_NEEDS_STRONG',
-          responseSpeech: 'Este comando é de alto risco. Por favor, diga explicitamente "confirmo" ou "autorizo" para que eu possa executá-lo.',
+          responseSpeech: 'Este comando é de alto risco. Aprove pelo botão na interface após revisar o comando literal.',
           durationMs: Date.now() - startTime,
         };
       }

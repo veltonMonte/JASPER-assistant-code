@@ -1,11 +1,30 @@
-import { exec } from 'child_process';
+import path from 'node:path';
+import { runProgram } from '../security/process.js';
 import { toolEvents } from '../events/toolEvents.js';
 import crypto from 'crypto';
 
 export type CommandRiskLevel = 'safe' | 'medium' | 'high';
 
-// Whitelist em memória para a sessão atual (prefixos aprovados com "sempre permitir")
-const autoApproveWhitelist = new Set<string>();
+// Permissão temporária por comando literal, concedida somente pela interface.
+const autoApproveWhitelist = new Map<string, number>();
+const TERMINAL_CWD = path.resolve(process.cwd());
+const SHELL_META = /[;&|`$()<>\{\}\n\r]/;
+const normalizedCommand = (command: string) => command.trim().replace(/\s+/g, ' ');
+
+function commandTokens(command: string): string[] | null {
+  const tokens: string[] = [];
+  const expression = /"([^"\\]*)"|'([^'\\]*)'|([^\s"'\\]+)/gy;
+  let offset = 0;
+  while (offset < command.length) {
+    while (/\s/.test(command[offset] || '') && offset < command.length) offset++;
+    if (offset === command.length) break;
+    expression.lastIndex = offset;
+    const match = expression.exec(command);
+    if (!match) return null;
+    tokens.push(match[1] ?? match[2] ?? match[3]); offset = expression.lastIndex;
+  }
+  return tokens.length ? tokens : null;
+}
 
 // Tempo máximo aguardando confirmação do usuário
 const APPROVAL_TIMEOUT_MS = 90_000;
@@ -35,40 +54,28 @@ export function getBlockedReason(comando: string): string | null {
 }
 
 export function getCommandRiskLevel(comando: string): CommandRiskLevel {
-  const trimmed = comando.trim().toLowerCase();
-  
-  // High risk (comandos de remoção, push, término de processos, alteração de permissão)
-  if (
-    trimmed.includes('rm ') || trimmed.includes('rmdir') ||
-    trimmed.includes('git push') || trimmed.includes('git reset') || trimmed.includes('git checkout -f') ||
-    trimmed.includes('kill ') || trimmed.includes('pkill') || trimmed.includes('chmod') ||
-    trimmed.includes('chown') || trimmed.includes('dd ') || trimmed.includes('mkfs') ||
-    trimmed.includes('npm publish') || trimmed.includes('drop ')
-  ) {
-    return 'high';
+  if (SHELL_META.test(comando) || /(?:^|[\s/])(?:\.env(?:\.[^\s/]*)?|\.ssh|\.gnupg|id_rsa|jasper\.db)(?:$|[\s/])|\.git\/config|tokens?/i.test(comando)) return 'high';
+  const tokens = commandTokens(comando.trim());
+  if (!tokens) return 'high';
+  const literal = tokens.join(' ');
+  if (/(?:^|[\s/])(?:\.env(?:\.[^\s/]*)?|\.ssh|\.gnupg|id_rsa|jasper\.db)(?:$|[\s/])|\.git\/config|tokens?/i.test(literal)) return 'high';
+  const safe = [
+    /^(pwd|whoami)$/, /^ls(?: -[lah]+)?$/, /^uname(?: -[arsmn]+)?$/, /^uptime(?: -p)?$/,
+    /^(df|free) -h$/, /^node -v$/, /^python3 --version$/,
+    /^git status(?: --short| --branch| --porcelain| -sb)*$/,
+    /^git diff(?: --stat| --name-only| --numstat| --check| --cached)*$/,
+    /^git log(?: --oneline| -n (?:[1-9]|[1-4][0-9]|50)| --max-count=(?:[1-9]|[1-4][0-9]|50))*$/,
+  ];
+  if (safe.some(rule => rule.test(literal))) return 'safe';
+  if (['cat', 'head', 'tail', 'grep'].includes(tokens[0])) {
+    for (const token of tokens.slice(1).filter(item => !item.startsWith('-'))) {
+      const resolved = path.resolve(TERMINAL_CWD, token);
+      if (token.startsWith('~') || path.relative(TERMINAL_CWD, resolved).startsWith('..') || path.isAbsolute(token)) return 'high';
+    }
+    return 'medium';
   }
-  
-  // Safe / Read-only (comandos inofensivos de consulta)
-  if (
-    trimmed.startsWith('ls') || trimmed.startsWith('dir') ||
-    trimmed.startsWith('cat ') || trimmed.startsWith('echo ') ||
-    trimmed.startsWith('pwd') || trimmed.startsWith('git status') ||
-    trimmed.startsWith('git diff') || trimmed.startsWith('git log') ||
-    trimmed.startsWith('git branch') || trimmed.startsWith('node -v') ||
-    trimmed.startsWith('npm -v') || trimmed.startsWith('python --version') ||
-    trimmed.startsWith('which ') || trimmed.startsWith('head ') ||
-    trimmed.startsWith('tail ') || trimmed.startsWith('grep ') ||
-    trimmed.startsWith('whoami') || trimmed.startsWith('uname')
-  ) {
-    return 'safe';
-  }
-
-  return 'medium';
-}
-
-function getCommandPrefix(comando: string): string {
-  const parts = comando.trim().split(/\s+/);
-  return parts.length > 1 ? `${parts[0]} ${parts[1]}` : parts[0] || comando.trim();
+  if (tokens[0] === 'echo') return 'medium';
+  return 'high';
 }
 
 // ==============================================================================
@@ -87,10 +94,8 @@ function normalizeSpeech(text: string): string {
 
 const NEGATIVE_WORDS = ['nao', 'cancela', 'cancelar', 'cancelado', 'nega', 'negar', 'negado', 'recusa', 'recuso', 'recusado', 'aborta', 'abortar', 'pare', 'esquece', 'nunca'];
 const NEGATIVE_PHRASES = ['nem pensar', 'de jeito nenhum', 'de forma alguma', 'deixa pra la', 'deixa para la', 'melhor nao'];
-const AFFIRMATIVE_WORDS = ['sim', 'confirmo', 'confirmado', 'confirma', 'autorizo', 'autorizado', 'aprovo', 'aprovado', 'ok', 'okay', 'pode', 'executa', 'executar', 'roda', 'rodar', 'manda', 'claro', 'positivo', 'bora', 'permito', 'aceito', 'yes', 'dale'];
-const AFFIRMATIVE_PHRASES = ['vai em frente', 'com certeza', 'pode ser', 'manda ver', 'manda bala', 'faz isso', 'pode fazer', 'pode rodar', 'pode executar', 'roda ai', 'executa ai', 'faz isso jasper', 'manda ver jasper', 'sem problemas'];
+const AFFIRMATIVE_PHRASES = ['sim execute', 'sim pode executar', 'pode executar', 'confirmo', 'autorizo', 'autorizo a execucao'];
 const EXTRA_NEGATIVE_PHRASES = ['nao executa', 'nao roda', 'nao quero', 'deixa quieto'];
-const STRONG_CONFIRM_WORDS = ['confirmo', 'confirmado', 'autorizo', 'autorizado'];
 const REMEMBER_PHRASES = ['sempre permitir', 'sempre pode', 'pode sempre', 'nao precisa perguntar', 'nao pergunte mais', 'lembra disso', 'sempre autorizo'];
 
 export type SpeechDecision = 'approve' | 'deny' | 'needs_strong' | null;
@@ -98,7 +103,7 @@ export type SpeechDecision = 'approve' | 'deny' | 'needs_strong' | null;
 /**
  * Interpreta uma fala do usuário como resposta à solicitação pendente.
  * Negativas têm prioridade ("não pode executar" é negação).
- * Comandos de alto risco exigem confirmação forte ("confirmo"/"autorizo").
+ * Comandos de alto risco exigem o botão da interface.
  */
 export function interpretApprovalSpeech(text: string, riskLevel: CommandRiskLevel): SpeechDecision {
   const clean = normalizeSpeech(text);
@@ -109,10 +114,10 @@ export function interpretApprovalSpeech(text: string, riskLevel: CommandRiskLeve
     return 'deny';
   }
 
-  const affirmative = words.some((w) => AFFIRMATIVE_WORDS.includes(w)) || AFFIRMATIVE_PHRASES.some((p) => clean.includes(p));
+  const affirmative = AFFIRMATIVE_PHRASES.includes(clean.replace(/\bjasper\b/g, '').trim());
   if (!affirmative) return null;
 
-  if (riskLevel === 'high' && !words.some((w) => STRONG_CONFIRM_WORDS.includes(w))) {
+  if (riskLevel === 'high') {
     return 'needs_strong';
   }
   return 'approve';
@@ -320,7 +325,8 @@ export async function requestTerminalCommand(
   comando: string,
   mode: ApprovalMode,
 ): Promise<{ immediate: TerminalResult } | { pending: PendingTerminalRequest }> {
-  const command = (comando || '').trim();
+  const command = typeof comando === 'string' ? comando.trim() : '';
+  if (command.length > 4000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(command)) return { immediate: { success: false, message: 'Comando inválido ou grande demais.' } };
   if (!command) {
     return { immediate: { success: false, message: 'Nenhum comando informado.' } };
   }
@@ -331,7 +337,8 @@ export async function requestTerminalCommand(
     return { immediate: { success: false, comando: command, message: `Comando bloqueado pela política de segurança: ${blocked}. Ele não pode ser executado pelo JASPER.` } };
   }
 
-  if (autoApproveWhitelist.has(getCommandPrefix(command)) || autoApproveWhitelist.has(command)) {
+  const key = normalizedCommand(command);
+  if ((autoApproveWhitelist.get(key) || 0) > Date.now() && !SHELL_META.test(command) && getCommandRiskLevel(command) === 'safe') {
     console.log(`[Terminal] Auto-aprovado via whitelist de sessão: ${command}`);
     return { immediate: await runExec(command) };
   }
@@ -367,6 +374,9 @@ export async function resolveTerminalApproval(
 ): Promise<TerminalResult | null> {
   const entry = pendingRequests.get(id);
   if (!entry) return null;
+  if (source === 'tool' || (decision.approved && (!['ui', 'voice', 'text'].includes(source) || (entry.req.riskLevel === 'high' && source !== 'ui') || (decision.customCommand && source !== 'ui')))) {
+    return { success: false, comando: entry.req.command, message: 'Aguardando aprovação humana pelo canal permitido.' };
+  }
   pendingRequests.delete(id);
   clearTimeout(entry.timer);
   const { req } = entry;
@@ -386,6 +396,11 @@ export async function resolveTerminalApproval(
   } else {
     if (decision.customCommand && decision.customCommand.trim()) {
       finalCommand = decision.customCommand.trim();
+      if (finalCommand.length > 4000 || /[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f]/.test(finalCommand)) {
+        result = { success: false, comando: finalCommand, message: 'Comando editado inválido.' };
+        finishResolution(req, false, source, result, finalCommand);
+        return result;
+      }
       const blocked = getBlockedReason(finalCommand);
       if (blocked) {
         result = { success: false, comando: finalCommand, message: `Comando editado bloqueado pela política de segurança: ${blocked}.` };
@@ -393,9 +408,8 @@ export async function resolveTerminalApproval(
         return result;
       }
     }
-    if (decision.remember) {
-      autoApproveWhitelist.add(getCommandPrefix(finalCommand));
-      autoApproveWhitelist.add(finalCommand);
+    if (decision.remember && source === 'ui' && !SHELL_META.test(finalCommand) && getCommandRiskLevel(finalCommand) === 'safe') {
+      autoApproveWhitelist.set(normalizedCommand(finalCommand), Date.now() + 30 * 60_000);
       console.log(`[Terminal] Comando adicionado à whitelist da sessão: "${finalCommand}"`);
     }
     console.log(`[Terminal] Executando comando aprovado (${source}): ${finalCommand}`);
@@ -467,8 +481,8 @@ export async function solicitarTerminalPorVoz(comando: string): Promise<any> {
   if ('immediate' in res) return res.immediate;
   const { pending } = res;
   const fraseConfirmacao = pending.riskLevel === 'high'
-    ? 'Este comando é de ALTO RISCO: o usuário precisa dizer explicitamente "confirmo" ou "autorizo".'
-    : 'O usuário pode responder "sim", "pode executar" ou "não".';
+    ? 'Este comando é de ALTO RISCO: a aprovação deve ocorrer pelo botão na interface.'
+    : 'O usuário pode responder "sim, execute", "confirmo" ou "não".';
   return {
     success: true,
     status: 'aguardando_confirmacao',
@@ -477,95 +491,33 @@ export async function solicitarTerminalPorVoz(comando: string): Promise<any> {
     risco: pending.riskLevel,
     instrucao:
       `O comando AINDA NÃO foi executado. Pergunte ao usuário em voz, de forma curta, se ele confirma a execução de "${pending.command}". ` +
-      `${fraseConfirmacao} Depois que o usuário responder, chame a ferramenta confirmar_comando_terminal com aprovado=true ou aprovado=false. ` +
+      `${fraseConfirmacao} A decisão é registrada pelo servidor; confirmar_comando_terminal apenas consulta o estado. ` +
       'Nunca confirme por conta própria sem ouvir a resposta do usuário.',
   };
 }
 
 /**
  * Chamada pelo modelo depois de ouvir a resposta do usuário.
- * Exige que o usuário tenha realmente falado após a solicitação (proteção contra alucinação).
+ * Somente consulta decisões já registradas pelo servidor; o modelo não pode aprovar.
  */
-export async function confirmarComandoTerminal(aprovado: boolean, lembrar = false): Promise<any> {
+export async function confirmarComandoTerminal(): Promise<any> {
   const pending = getPendingTerminalRequest();
-
-  if (!pending) {
-    // A confirmação pode já ter sido resolvida pela transcrição de voz ou pela interface.
-    if (lastResolved && Date.now() - lastResolved.resolvedAt < 60_000) {
-      lastResolved.delivered = true;
-      return {
-        ...lastResolved.result,
-        comando: lastResolved.command,
-        observacao: lastResolved.approved
-          ? 'A decisão do usuário já havia sido registrada e o comando foi executado. Informe o resultado.'
-          : 'O usuário já havia negado ou a solicitação expirou. Informe que o comando não foi executado.',
-      };
-    }
-    return { success: false, message: 'Não há nenhum comando aguardando confirmação.' };
-  }
-
-  if (!aprovado) {
-    return await resolveTerminalApproval(pending.id, { approved: false }, 'tool');
-  }
-
-  // Proteção anti-alucinação:
-  // Exige que o usuário tenha falado após a solicitação OU que já tenha se passado tempo suficiente (> 800ms)
-  // para permitir que o modelo neural do Gemini Live confirme após ouvir a voz do usuário.
-  const userSpokeRecently = pending.userSpeechAt > pending.createdAt;
-  const elapsedSinceCreation = Date.now() - pending.createdAt;
-
-  if (!userSpokeRecently && elapsedSinceCreation < 800) {
-    return {
-      success: false,
-      status: 'aguardando_confirmacao',
-      message: 'O usuário ainda não respondeu. Pergunte se ele confirma e aguarde a resposta antes de chamar esta ferramenta novamente.',
-    };
-  }
-
-  if (pending.transcript) {
-    const decision = interpretApprovalSpeech(pending.transcript, pending.riskLevel);
-    if (decision === 'deny') {
-      return await resolveTerminalApproval(pending.id, { approved: false }, 'tool');
-    }
-    if (decision === 'needs_strong') {
-      return {
-        success: false,
-        status: 'aguardando_confirmacao',
-        message: 'Comando de alto risco: peça ao usuário que diga explicitamente "confirmo" ou "autorizo".',
-      };
-    }
-  } else if (pending.riskLevel === 'high') {
-    return {
-      success: false,
-      status: 'aguardando_confirmacao',
-      message: 'Comando de alto risco sem transcrição confiável da resposta. Peça ao usuário que diga "confirmo" ou aprove pelo botão na tela.',
-    };
-  }
-
-  const remember = lembrar || (pending.transcript ? wantsRemember(pending.transcript) : false);
-  return await resolveTerminalApproval(pending.id, { approved: true, remember }, 'tool');
+  if (pending) return { success: false, status: 'aguardando', comando: pending.command, message: 'Aguarde a decisão humana. Esta ferramenta apenas consulta o estado.' };
+  if (!lastResolved) return { success: false, status: 'sem_solicitacao', message: 'Não há comando aguardando aprovação.' };
+  lastResolved.delivered = true;
+  return { ...lastResolved.result, status: lastResolved.approved ? 'aprovado' : lastResolved.source === 'timeout' ? 'expirado' : 'negado' };
 }
 
-function runExec(comandoToRun: string): Promise<TerminalResult> {
-  return new Promise((resolve) => {
-    exec(comandoToRun, { timeout: 30000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
-      const output = (stdout || '').trim();
-      if (error) {
-        console.error(`[Terminal] Erro na execução:`, error.message);
-        return resolve({
-          success: false,
-          comando: comandoToRun,
-          message: `O comando falhou com o erro: ${error.message}`,
-          error: (stderr || error.message).slice(0, 4000),
-          output: output.slice(0, 4000),
-        });
-      }
-      resolve({
-        success: true,
-        comando: comandoToRun,
-        message: 'Comando executado com sucesso.',
-        output: output.length > 4000 ? output.slice(0, 4000) + '\n...[saída truncada]' : output,
-      });
-    });
+async function runExec(command: string): Promise<TerminalResult> {
+  const tokens = commandTokens(command);
+  const shell = SHELL_META.test(command) || !tokens;
+  const result = await runProgram(shell ? '/bin/sh' : tokens[0], shell ? ['-c', command] : tokens.slice(1), {
+    cwd: TERMINAL_CWD, timeoutMs: 30_000, maxBuffer: 1024 * 1024,
   });
+  return {
+    success: result.ok, comando: command,
+    message: result.ok ? 'Comando executado com sucesso.' : 'O comando não foi concluído.',
+    output: result.stdout.trim().slice(0, 4000),
+    ...(result.ok ? {} : { error: result.stderr.slice(0, 4000) }),
+  };
 }

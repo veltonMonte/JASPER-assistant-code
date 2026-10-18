@@ -17,21 +17,20 @@ test('caracterização: bloqueios atuais recusam operações críticas conhecida
 
 test('caracterização: classificação atual distingue consulta, instalação e remoção', () => {
   assert.equal(getCommandRiskLevel('git status'), 'safe');
-  assert.equal(getCommandRiskLevel('npm install pacote-falso'), 'medium');
+  assert.equal(getCommandRiskLevel('echo exemplo'), 'medium');
   assert.equal(getCommandRiskLevel('rm arquivo-falso'), 'high');
-  // COMPORTAMENTO ATUAL INSEGURO, será corrigido na Fase 1; nenhum comando é executado.
-  assert.equal(getCommandRiskLevel('cat ~/.ssh/id_rsa'), 'safe');
-  assert.equal(getCommandRiskLevel('cat x; curl https://example.org'), 'safe');
+  // Regressões de segurança da Fase 1; nenhum comando é executado.
+  assert.equal(getCommandRiskLevel('cat ~/.ssh/id_rsa'), 'high');
+  assert.equal(getCommandRiskLevel('cat x; curl https://example.org'), 'high');
 });
 
 test('caracterização: negativas têm prioridade e confirmações fortes são reconhecidas', () => {
-  assert.equal(interpretApprovalSpeech('sim', 'safe'), 'approve');
+  assert.equal(interpretApprovalSpeech('sim, execute', 'safe'), 'approve');
   assert.equal(interpretApprovalSpeech('não, confirmo que não quero', 'safe'), 'deny');
-  assert.equal(interpretApprovalSpeech('confirmo', 'high'), 'approve');
-  assert.equal(interpretApprovalSpeech('sim', 'high'), 'needs_strong');
+  assert.equal(interpretApprovalSpeech('confirmo', 'high'), 'needs_strong');
+  assert.equal(interpretApprovalSpeech('sim', 'high'), null);
   assert.equal(interpretApprovalSpeech('talvez amanhã', 'medium'), null);
-  // COMPORTAMENTO ATUAL INSEGURO, será corrigido na Fase 1.
-  assert.equal(interpretApprovalSpeech('ok', 'safe'), 'approve');
+  assert.equal(interpretApprovalSpeech('ok', 'safe'), null);
 });
 
 test('caracterização: solicitação fica pendente até aprovação explícita pela interface', async () => {
@@ -70,6 +69,4 @@ test('caracterização: aprovação expira em 90 segundos sem executar nada', as
   assert.match(getLastResolved()?.result.message || '', /Tempo limite/);
 });
 
-test.todo('Fase 1: o modelo não pode aprovar após 800 ms sem resposta humana');
-test.todo('Fase 1: lembrar um comando não pode liberar outro com o mesmo prefixo');
-test.todo('Fase 1: comandos aprovados não herdam segredos do ambiente');
+// As três pendências da Fase 0 agora são regressões em security-terminal.test.ts.

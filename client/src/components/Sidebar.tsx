@@ -1,16 +1,23 @@
+import VoiceControls from './VoiceControls';
 import React, { useState, useEffect } from 'react';
 import { 
   X, MessageSquare, BrainCircuit, Cpu, Wrench, Monitor, Activity, 
   Settings, Lightbulb, Power, Smartphone, Sliders, RotateCcw,
-  Smile, ShieldCheck, Zap, Award, AlignLeft, Heart
+  Bell, Smile, ShieldCheck, Zap, Award, AlignLeft, Heart
 } from 'lucide-react';
-import { PersonalityConfig } from '../hooks/useJasperWebSocket';
+import { useDialogFocus } from '../hooks/useDialogFocus';
+import type { VoiceSettings, PersonalityConfig } from '../hooks/useJasperWebSocket';
 
 export interface SidebarProps {
   isOpen: boolean;
   onClose: () => void;
   onOpenDiagnostic: () => void;
+  onOpenProactive: () => void;
   onSendCommand: (cmd: string) => void;
+  isConnected: boolean;
+  isBusy: boolean;
+  voiceRequest: (path: string, init?: RequestInit) => Promise<Response>;
+  onPreviewVoice: (settings: VoiceSettings) => void;
   personality?: PersonalityConfig;
   onUpdatePersonality?: (trait: keyof PersonalityConfig, value: number) => void;
   onResetPersonality?: () => void;
@@ -23,9 +30,9 @@ const TRAIT_CONFIG: Array<{
   desc: string;
 }> = [
   { key: 'humor', label: 'Humor', icon: <Smile size={16} />, desc: 'Piadas e comentários espirituosos' },
-  { key: 'honestidade', label: 'Honestidade', icon: <ShieldCheck size={16} />, desc: 'Verdades diretas sem rodeios (TARS 90%)' },
-  { key: 'sarcasmo', label: 'Sarcasmo', icon: <Zap size={16} />, desc: 'Ironia militar e cinismo sutil' },
-  { key: 'formalidade', label: 'Formalidade', icon: <Award size={16} />, desc: 'Protocolo formal vs parceiro de missão' },
+  { key: 'honestidade', label: 'Franqueza', icon: <ShieldCheck size={16} />, desc: 'Como dizer a verdade: com mais tato ou mais franqueza' },
+  { key: 'sarcasmo', label: 'Sarcasmo', icon: <Zap size={16} />, desc: 'Ironia fina, sem perder a elegância' },
+  { key: 'formalidade', label: 'Formalidade', icon: <Award size={16} />, desc: 'Escolha das palavras e grau de formalidade' },
   { key: 'verbosidade', label: 'Verbosidade', icon: <AlignLeft size={16} />, desc: 'Respostas concisas ou aprofundadas' },
   { key: 'empatia', label: 'Empatia', icon: <Heart size={16} />, desc: 'Acolhimento vs foco prático na tarefa' },
 ];
@@ -33,12 +40,15 @@ const TRAIT_CONFIG: Array<{
 const Sidebar: React.FC<SidebarProps> = ({ 
   isOpen, 
   onClose, 
-  onOpenDiagnostic, 
+  onOpenDiagnostic,
+  onOpenProactive,
   onSendCommand,
   personality,
   onUpdatePersonality,
-  onResetPersonality
+  onResetPersonality,
+  isConnected, isBusy, voiceRequest, onPreviewVoice
 }) => {
+  const panelRef = useDialogFocus(isOpen, onClose);
   const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
   const [isInstallable, setIsInstallable] = useState(false);
   const [showPersonality, setShowPersonality] = useState(true);
@@ -74,37 +84,38 @@ const Sidebar: React.FC<SidebarProps> = ({
   return (
     <>
       <div className={`sidebar-backdrop ${isOpen ? 'open' : ''}`} onClick={onClose} />
-      <aside className={`sidebar ${isOpen ? 'open' : ''}`}>
+      <div ref={panelRef} className={`sidebar ${isOpen ? 'open' : ''}`} role="dialog" aria-modal={isOpen || undefined} aria-hidden={!isOpen} aria-labelledby="controls-title" tabIndex={-1}>
         <div className="sidebar-header">
-          <span className="sidebar-title">CONTROLE DO SISTEMA</span>
-          <button className="close-btn" onClick={onClose} aria-label="Close Sidebar"><X size={20} /></button>
+          <span className="sidebar-title" id="controls-title">Seu Jasper</span>
+          <button className="close-btn" onClick={onClose} aria-label="Fechar controles"><X size={20} /></button>
         </div>
         
         <div className="sidebar-menu">
-          <button className="sidebar-menu-item" onClick={() => onSendCommand('Mostrar conversas')}>
+          <button className="sidebar-menu-item" onClick={() => { onClose(); onOpenProactive(); }}><Bell size={16} /> Notícias e presença</button>
+          <button className="sidebar-menu-item" disabled={!isConnected} onClick={() => onSendCommand('Mostrar conversas')}>
             <MessageSquare size={16} /> Conversas
           </button>
-          <button className="sidebar-menu-item" onClick={() => onSendCommand('Ver memórias')}>
+          <button className="sidebar-menu-item" disabled={!isConnected} onClick={() => onSendCommand('Ver memórias')}>
             <BrainCircuit size={16} /> Memórias
           </button>
-          <button className="sidebar-menu-item" onClick={() => onSendCommand('Automação')}>
+          <button className="sidebar-menu-item" disabled={!isConnected} onClick={() => onSendCommand('Automação')}>
             <Cpu size={16} /> Automação
           </button>
-          <button className="sidebar-menu-item" onClick={() => onSendCommand('Ferramentas')}>
+          <button className="sidebar-menu-item" disabled={!isConnected} onClick={() => onSendCommand('Ferramentas')}>
             <Wrench size={16} /> Ferramentas
           </button>
         </div>
 
-        {/* Painel de Personalidade TARS (Interestelar) */}
+        <VoiceControls isOpen={isOpen} isBusy={isBusy} request={voiceRequest} onPreview={onPreviewVoice} />
         {personality && onUpdatePersonality && (
           <div className="personality-section">
-            <div 
+            <button type="button" aria-expanded={showPersonality}
               className="section-label personality-header-toggle" 
               onClick={() => setShowPersonality(prev => !prev)}
             >
-              <span className="flex-title"><Sliders size={14} /> Personalidade (TARS)</span>
+              <span className="flex-title"><Sliders size={14} /> Personalidade</span>
               <span className="toggle-indicator">{showPersonality ? '−' : '+'}</span>
-            </div>
+            </button>
 
             {showPersonality && (
               <div className="personality-sliders-container">
@@ -126,6 +137,7 @@ const Sidebar: React.FC<SidebarProps> = ({
                         value={val}
                         aria-label={`Ajustar ${label}`}
                         className="tars-slider"
+                        disabled={!isConnected}
                         onChange={(e) => onUpdatePersonality(key, Number(e.target.value))}
                       />
                     </div>
@@ -134,12 +146,13 @@ const Sidebar: React.FC<SidebarProps> = ({
 
                 {onResetPersonality && (
                   <button 
-                    className="tars-reset-btn" 
+                    className="tars-reset-btn"
+                    disabled={!isConnected}
                     onClick={onResetPersonality}
-                    title="Restaura os valores nominais do TARS (Humor 60%, Honestidade 90%, Sarcasmo 40%, etc)"
+                    title="Restaurar o estilo formal, espontâneo e com ironia discreta"
                   >
                     <RotateCcw size={13} />
-                    <span>Restaurar Padrão TARS</span>
+                    <span>Restaurar padrão</span>
                   </button>
                 )}
               </div>
@@ -150,22 +163,22 @@ const Sidebar: React.FC<SidebarProps> = ({
         <div className="device-section">
           <div className="section-label">Dispositivos</div>
           
-          <div className="device-row active">
+          <div className="device-row">
             <span className="device-icon"><Monitor size={20} /></span>
             <div className="device-meta">
               <span className="device-label">Workstation</span>
-              <span className="device-state">Online</span>
+              <span className="device-state">Consultar disponibilidade</span>
             </div>
-            <button className="power-btn on" onClick={() => onSendCommand('JASPER, desligar meu PC')}><Power size={14} /></button>
+            <button className="power-btn" disabled={!isConnected} aria-label="Ligar computador" title="Ligar computador" onClick={() => onSendCommand('JASPER, ligar meu computador')}><Power size={14} /></button>
           </div>
           
           <div className="device-row">
             <span className="device-icon"><Lightbulb size={20} /></span>
             <div className="device-meta">
               <span className="device-label">Iluminação Principal</span>
-              <span className="device-state">Desligado</span>
+              <span className="device-state">Controle por comando</span>
             </div>
-            <button className="power-btn" onClick={() => onSendCommand('JASPER, ligar luz do escritório')}><Power size={14} /></button>
+            <button className="power-btn" disabled={!isConnected} aria-label="Ligar iluminação do escritório" title="Ligar iluminação" onClick={() => onSendCommand('JASPER, ligar luz do escritório')}><Power size={14} /></button>
           </div>
         </div>
 
@@ -173,7 +186,7 @@ const Sidebar: React.FC<SidebarProps> = ({
           <button className="sidebar-menu-item" onClick={() => { onClose(); onOpenDiagnostic(); }}>
             <Activity size={16} /> Diagnóstico
           </button>
-          <button className="sidebar-menu-item" onClick={() => onSendCommand('Configurações')}>
+          <button className="sidebar-menu-item" disabled={!isConnected} onClick={() => onSendCommand('Configurações')}>
             <Settings size={16} /> Configurações
           </button>
           {isInstallable && (
@@ -182,7 +195,7 @@ const Sidebar: React.FC<SidebarProps> = ({
             </button>
           )}
         </div>
-      </aside>
+      </div>
     </>
   );
 };

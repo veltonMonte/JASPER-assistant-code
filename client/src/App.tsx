@@ -107,7 +107,7 @@ export default function App() {
           )}
         </main>
         <div className="input-container">
-          <InputBar onSendText={sendText} onToggleMic={toggleMic} isListening={isMicActive} isMicStarting={isMicStarting} isVoiceReady={isVoiceReady} isConnected={isConnected} />
+          <InputBar canUseLocalMicrophone={authStatus.isMaster && authStatus.isAuthorized && activeMic === 'womic'} onSendText={sendText} onToggleMic={toggleMic} isListening={isMicActive} isMicStarting={isMicStarting} isVoiceReady={isVoiceReady} isConnected={isConnected} />
           <div className="workspace-footer"><span><AudioLines size={12} /> Voz e texto, em sintonia.</span><span className="footer-signature">JASPER <span>/</span> PERSONAL ASSISTANT</span></div>
         </div>
         </>}

@@ -10,3 +10,16 @@ __pycache__/
 public/assets/
 client/public/*.apk
 squashfs-root/
+
+# Credenciais e dados locais
+.env.*
+!.env.example
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+*.pem
+*.key
+.git-credentials
+credentials.json
+secrets.json

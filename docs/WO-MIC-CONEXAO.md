@@ -48,8 +48,15 @@ sudo bash /home/velton/projetos/jasper/scripts/enable-womic-loopback.sh
 Após o comando, o serviço detecta o driver e tenta reconectar automaticamente.
 O aplicativo WO Mic do celular deve continuar iniciado em modo Wi-Fi. Não basta
 a porta do celular responder para confirmar captação: é preciso conferir cliente,
-ponte e reconhecimento de fala no Jasper. O status final da ativação manual é
-registrado ao concluir o atendimento.
+ponte e reconhecimento de fala no Jasper. O usuário executou o ajuste e confirmou a mensagem de ativação. Foi verificado:
+`sysfs`/ALSA com `snd_aloop` e placa Loopback, cliente conectado ao telefone,
+captura e reprodução da ponte ativas. Uma medição sem gravação de arquivo
+observou RMS 0,0917 e pico 0,7041 em aproximadamente seis segundos de áudio.
+O arquivo de carregamento persistente contém `snd-aloop`. Os dois vínculos de
+áudio do Sunshine continuam ativos na saída virtual correta.
+
+O usuário relatou depois que o botão de microfone da interface fica desativado;
+a investigação dessa etapa do navegador continua após restaurar a ponte.
 
 O aviso visual do microfone é legado e não comprova fluxo de áudio. A notificação
 HTTP antiga da ponte depende da autenticação introduzida na Fase 1 e permanece

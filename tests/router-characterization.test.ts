@@ -22,10 +22,9 @@ before(async () => {
 });
 afterEach(async () => { await cancelAllPendingTerminal(); });
 
-test('caracterização: oito entradas percorrem os ramos atuais sem rede real', async () => {
+test('comandos diretos preservam seus ramos sem rede real', async () => {
   for (const [phrase, intent] of [
     ['que horas são', 'GET_TIME'], ['qual o horário', 'GET_TIME'],
-    ['oi', 'GREETING'], ['boa noite', 'GREETING'],
     ['ligue meu pc', 'TURN_ON_PC'], ['desliga o pc', 'SHUTDOWN_PC'],
   ]) {
     const result = await router.route(phrase);
@@ -52,4 +51,14 @@ test('caracterização: confirmação pendente aprova echo e negativa cancela', 
   const denied = await router.route('não');
   assert.equal(denied.intentName, 'TERMINAL_DENY');
   assert.equal(denied.toolResult.success, false);
+});
+
+
+test('cumprimentos e papo casual seguem para a IA com contexto, sem saudação fixa', async () => {
+  for (const phrase of ['oi', 'Jasper, olá', 'bom dia', 'boa tarde', 'boa noite', 'tudo bem?', 'hoje foi puxado', 'só queria conversar', 'e aquele assunto?']) {
+    const result = await router.route(phrase);
+    assert.equal(result.handledDirectly, false, phrase);
+    assert.equal(result.responseSpeech, undefined, phrase);
+    assert.equal(result.toolResult, undefined, phrase);
+  }
 });

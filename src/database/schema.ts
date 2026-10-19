@@ -8,6 +8,18 @@ CREATE TABLE IF NOT EXISTS memory (
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
 );
+-- Internal application settings are separate from facts remembered by the assistant.
+CREATE TABLE IF NOT EXISTS assistant_settings (
+  key TEXT PRIMARY KEY,
+  value TEXT NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+INSERT OR IGNORE INTO assistant_settings (key, value, updated_at)
+  SELECT key, value, updated_at FROM memory
+  WHERE category = 'jasper-settings' AND key IN ('jasper.proactive.settings', 'jasper.proactive.runtime');
+DELETE FROM memory WHERE category = 'jasper-settings'
+  AND key IN ('jasper.proactive.settings', 'jasper.proactive.runtime');
+
 -- Tabela para gerenciar os 6 parâmetros de personalidade estilo TARS (Interestelar)
 CREATE TABLE IF NOT EXISTS personality_config (
   trait TEXT PRIMARY KEY,
@@ -40,6 +52,20 @@ CREATE TABLE IF NOT EXISTS performance_logs (
 );
 
 -- Tabela para gerenciar alarmes e agendamentos
+
+-- Tabela para gerenciar dispositivos autorizados na rede do JASPER
+CREATE TABLE IF NOT EXISTS authorized_devices (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  device_id TEXT UNIQUE NOT NULL,
+  device_name TEXT NOT NULL,
+  status TEXT NOT NULL, -- "pending" | "approved" | "denied"
+  auth_token TEXT UNIQUE,
+  ip_address TEXT,
+  approved_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
 CREATE TABLE IF NOT EXISTS alarms_agenda (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   type TEXT NOT NULL, -- 'alarm' ou 'agenda'

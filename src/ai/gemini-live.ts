@@ -1,4 +1,7 @@
 import { activeScenePrompt } from '../presentation/scene-session.js';
+import { fastAudioGenerationConfig, LIVE_SILENCE_MS, LIVE_PREFIX_PADDING_MS } from '../voice/realtime-config.js';
+import { voicePreferences } from '../voice/preferences.js';
+import { buildVoiceDirection } from '../voice/profiles.js';
 import { buildPersonalityPrompt } from "./personality.js";
 import { WebSocket } from 'ws';
 import { EventEmitter } from 'events';
@@ -12,8 +15,8 @@ export class GeminiLiveSession extends EventEmitter {
   private isConnected: boolean = false;
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectAttempts: number = 0;
-  private maxReconnectAttempts: number = 10;
   private setupComplete: boolean = false;
+  private shouldReconnect = true;
 
   constructor() {
     super();
@@ -30,6 +33,7 @@ export class GeminiLiveSession extends EventEmitter {
   public setVisualSession(id:string):void {this.visualSessionId=id;}
 
   public async connect(): Promise<void> {
+    this.shouldReconnect = true;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -43,11 +47,12 @@ export class GeminiLiveSession extends EventEmitter {
     const host = 'generativelanguage.googleapis.com';
     const uri = `wss://${host}/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent?key=${config.gemini.apiKey}`;
 
-    console.log(`🔌 Conectando à Gemini Live API (${config.gemini.liveModel}, voz: ${config.gemini.voice})...`);
+    console.log(`🔌 Conectando à Gemini Live API (${config.gemini.liveModel}, perfil de voz salvo)...`);
 
     return new Promise((resolve) => {
       try {
         this.ws = new WebSocket(uri);
+        const socket = this.ws;
 
         const connectionTimeout = setTimeout(() => {
           if (!this.isConnected) {
@@ -59,15 +64,17 @@ export class GeminiLiveSession extends EventEmitter {
         }, 8000);
 
         this.ws.on('open', async () => {
+          if (this.ws !== socket) return;
           clearTimeout(connectionTimeout);
           console.log('✅ Conexão WebSocket com a Gemini Live API estabelecida!');
           this.isConnected = true;
-          this.reconnectAttempts = 0;
-          await this.sendSetupHandshake();
+          try { await this.sendSetupHandshake(); }
+          catch (error) { this.emit('error', error); socket.close(); }
           resolve();
         });
 
         this.ws.on('message', async (data: Buffer) => {
+          if (this.ws !== socket) return;
           try {
             const response = JSON.parse(data.toString());
             await this.handleGeminiMessage(response);
@@ -77,6 +84,7 @@ export class GeminiLiveSession extends EventEmitter {
         });
 
         this.ws.on('error', (err) => {
+          if (this.ws !== socket) return;
           clearTimeout(connectionTimeout);
           console.warn('⚠️ Erro na conexão Gemini Live WebSocket:', err.message);
           this.isConnected = false;
@@ -86,10 +94,13 @@ export class GeminiLiveSession extends EventEmitter {
         });
 
         this.ws.on('close', (code, reason) => {
+          if (this.ws !== socket) return;
+          clearTimeout(connectionTimeout);
           const reasonStr = reason ? reason.toString() : 'sem motivo';
           console.log(`🔌 Gemini Live WebSocket desconectado (code: ${code}, reason: ${reasonStr})`);
           this.isConnected = false;
           this.setupComplete = false;
+          this.emit('disconnected');
           this.scheduleReconnect();
         });
       } catch (err) {
@@ -102,12 +113,7 @@ export class GeminiLiveSession extends EventEmitter {
   }
 
   private scheduleReconnect(): void {
-    if (this.reconnectTimer) return;
-    if (this.reconnectAttempts >= this.maxReconnectAttempts) {
-      console.warn('⚠️ Máximo de tentativas de reconexão atingido.');
-      return;
-    }
-
+    if (!this.shouldReconnect || this.reconnectTimer) return;
     const delay = Math.min(2000 * Math.pow(1.5, this.reconnectAttempts), 30000);
     this.reconnectAttempts++;
     console.log(`🔄 Reconectando ao Gemini Live em ${Math.round(delay / 1000)}s (tentativa ${this.reconnectAttempts})...`);
@@ -121,6 +127,8 @@ export class GeminiLiveSession extends EventEmitter {
   private async sendSetupHandshake(): Promise<void> {
     if (!this.ws || !this.isConnected) return;
 
+    const socket = this.ws;
+    const voiceSettings = await voicePreferences.get();
     const memories = await dbManager.getAllMemories();
     let memorySummary = '';
     if (memories.length > 0) {
@@ -144,17 +152,18 @@ export class GeminiLiveSession extends EventEmitter {
     const timeContext = `\n[CONTEXTO DE TEMPO DA CONEXÃO]\nO horário que esta sessão iniciou em Brasília (America/Sao_Paulo) foi: ${fmtStr}.\n(Formato ISO: ${isoStr}).\nATENÇÃO: Este horário pode estar desatualizado! Você DEVE SEMPRE chamar a ferramenta 'consultarHorario' ANTES de agendar qualquer alarme para saber a hora ATUAL exata e calcular o tempo corretamente!\n`;
 
     const fullPrompt = JASPER_SYSTEM_PROMPT + personalityPrompt + memorySummary + timeContext +
-      '\nVocê é JASPER e está conversando por voz em tempo real. Responda com voz natural e objetiva em português do Brasil.';
+      '\nVocê é JASPER e está conversando por voz em tempo real. Responda com voz natural e objetiva em português do Brasil.' + buildVoiceDirection(voiceSettings);
 
     const setupPayload = {
       setup: {
         model: `models/${config.gemini.liveModel}`,
         generationConfig: {
           responseModalities: ['AUDIO'],
+          ...fastAudioGenerationConfig(config.gemini.liveModel),
           speechConfig: {
             voiceConfig: {
               prebuiltVoiceConfig: {
-                voiceName: config.gemini.voice || 'Charon',
+                voiceName: voiceSettings.voice,
               },
             },
           },
@@ -164,6 +173,14 @@ export class GeminiLiveSession extends EventEmitter {
         },
         // Transcrição da fala do usuário: usada para reconhecer confirmações verbais de comandos de terminal
         inputAudioTranscription: {},
+        outputAudioTranscription: {},
+        realtimeInputConfig: {
+          automaticActivityDetection: {
+            disabled: false,
+            prefixPaddingMs: LIVE_PREFIX_PADDING_MS,
+            silenceDurationMs: LIVE_SILENCE_MS,
+          },
+        },
         tools: [
           {
             functionDeclarations: geminiToolDeclarations as any,
@@ -172,12 +189,15 @@ export class GeminiLiveSession extends EventEmitter {
       },
     };
 
-    this.ws.send(JSON.stringify(setupPayload));
-    console.log(`⚙️ Handshake Setup enviado (voz: ${config.gemini.voice || 'Charon'}).`);
+    if (this.ws !== socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify(setupPayload));
+    console.log(`⚙️ Handshake Setup enviado (voz: ${voiceSettings.voice}).`);
   }
 
   public sendAudioChunk(base64PcmAudio: string, sampleRate: number = 16000): boolean {
     if (!this.isLiveConnected()) return false;
+    // Live audio has to be current. Queuing old speech makes answers arrive late.
+    if (this.ws!.bufferedAmount > 512_000) return false;
 
     const audioPayload = {
       realtimeInput: {
@@ -195,8 +215,9 @@ export class GeminiLiveSession extends EventEmitter {
   }
 
   public forceTurnComplete(): boolean {
-    // No Gemini Live API, o streaming de áudio já utiliza o VAD neural automático do servidor Gemini.
-    // Enviar clientContent sem turns gera erro 1007 (invalid argument) e derruba a conexão WebSocket.
+    if (!this.isLiveConnected()) return false;
+    // Flush buffered input when capture ends; an empty clientContent is invalid.
+    this.ws!.send(JSON.stringify({ realtimeInput: { audioStreamEnd: true } }));
     return true;
   }
 
@@ -224,6 +245,7 @@ export class GeminiLiveSession extends EventEmitter {
     if (response.setupComplete) {
       console.log('✅ Gemini Live Setup concluído com sucesso!');
       this.setupComplete = true;
+      this.reconnectAttempts = 0;
       this.emit('setup_complete');
       return;
     }
@@ -258,13 +280,18 @@ export class GeminiLiveSession extends EventEmitter {
     // serverContent received (omitted raw base64 audio dump to save log space)
 
     if (serverContent.inputTranscription?.text) {
-      this.emit('input_transcription', serverContent.inputTranscription.text);
+      const text = serverContent.inputTranscription.text.replace(/<(?:noise|silence)>/gi, '');
+      if (text.trim()) this.emit('input_transcription', text);
     }
 
     if (serverContent.interrupted) {
       console.log('⚡ Gemini Live confirmou interrupção!');
       this.emit('interrupted');
       return;
+    }
+
+    if (serverContent.outputTranscription?.text) {
+      this.emit('text_chunk', serverContent.outputTranscription.text);
     }
 
     const parts = serverContent.modelTurn?.parts;
@@ -276,7 +303,7 @@ export class GeminiLiveSession extends EventEmitter {
           this.emit('audio_chunk', part.inlineData.data);
         }
 
-        if (part.text) {
+        if (part.text && !part.thought && !serverContent.outputTranscription) {
           this.emit('text_chunk', part.text);
         }
       }
@@ -308,6 +335,7 @@ export class GeminiLiveSession extends EventEmitter {
   }
 
   public close(): void {
+    this.shouldReconnect = false;
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
@@ -320,13 +348,10 @@ export class GeminiLiveSession extends EventEmitter {
     }
   }
   public async reloadPersonality(): Promise<void> {
-    console.log("🔄 Atualizando personalidade TARS no Gemini Live...");
-    if (this.ws && this.isLiveConnected()) {
-      try {
-        this.ws.close();
-      } catch (e) {}
-      await this.connect();
-    }
+    console.log('🔄 Aplicando voz e personalidade do Jasper...');
+    this.emit('disconnected');
+    this.close();
+    await this.connect();
   }
 
 }

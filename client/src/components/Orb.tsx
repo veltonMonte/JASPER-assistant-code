@@ -5,12 +5,14 @@ export type OrbState = 'IDLE' | 'LISTENING' | 'PROCESSING' | 'SPEAKING';
 interface OrbProps {
   state: OrbState;
   getAudioLevel?: () => number;
+  animated?: boolean;
 }
 
 // Simple deterministic pseudo-random function
 function hash(x: number, y: number): number {
   const dot = x * 12.9898 + y * 78.233;
-  return (Math.sin(dot) * 43758.5453123) % 1;
+  const value = Math.sin(dot) * 43758.5453123;
+  return value - Math.floor(value);
 }
 
 // Simple 2D value noise
@@ -34,9 +36,11 @@ function noise(x: number, y: number): number {
          d * ux * uy;
 }
 
-export default function Orb({ state, getAudioLevel }: OrbProps) {
+export default function Orb({ state, getAudioLevel, animated = true }: OrbProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stateRef = useRef(state);
+  const audioRef = useRef(getAudioLevel);
+  audioRef.current = getAudioLevel;
 
   useEffect(() => {
     stateRef.current = state;
@@ -46,12 +50,13 @@ export default function Orb({ state, getAudioLevel }: OrbProps) {
     const canvas = canvasRef.current;
     if (!canvas) return;
 
-    const ctx = canvas.getContext('2d');
+    let ctx: CanvasRenderingContext2D | null = null;
+    try { ctx = canvas.getContext('2d'); } catch { return; }
     if (!ctx) return;
 
     const size = 200;
-    const radius = 50;
-    const dpr = window.devicePixelRatio || 1;
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
 
     canvas.width = size * dpr;
     canvas.height = size * dpr;
@@ -61,16 +66,18 @@ export default function Orb({ state, getAudioLevel }: OrbProps) {
     const noiseCanvas = document.createElement('canvas');
     noiseCanvas.width = size;
     noiseCanvas.height = size;
-    const noiseCtx = noiseCanvas.getContext('2d')!;
-    const noiseData = noiseCtx.createImageData(size, size);
-    for (let i = 0; i < noiseData.data.length; i += 4) {
-      const v = Math.random() * 255;
-      noiseData.data[i] = v;
-      noiseData.data[i + 1] = v;
-      noiseData.data[i + 2] = v;
-      noiseData.data[i + 3] = 20; // light opacity for grain
+    const noiseCtx = noiseCanvas.getContext('2d');
+    if (noiseCtx) {
+      const noiseData = noiseCtx.createImageData(size, size);
+      for (let i = 0; i < noiseData.data.length; i += 4) {
+        const v = Math.random() * 255;
+        noiseData.data[i] = v;
+        noiseData.data[i + 1] = v;
+        noiseData.data[i + 2] = v;
+        noiseData.data[i + 3] = 20; // light opacity for grain
+      }
+      noiseCtx.putImageData(noiseData, 0, 0);
     }
-    noiseCtx.putImageData(noiseData, 0, 0);
 
     let animationFrameId: number;
     let time = 0;
@@ -89,9 +96,12 @@ export default function Orb({ state, getAudioLevel }: OrbProps) {
       { color: '#22d3ee', size: 34, speedX: 1.3, speedY: 1.5, offset: 8 },
     ];
 
-    const render = () => {
+    let previousTime = 0;
+    const render = (timestamp = 0) => {
+      const step = previousTime ? Math.min((timestamp - previousTime) / 16.667, 2) : 1;
+      previousTime = timestamp;
       const currentState = stateRef.current;
-      time += 0.01; // Real continuous time for rhythmic pulsing
+      time += 0.01 * step; // Real continuous time for rhythmic pulsing
 
       let targetSpeedMult = 1;
       let targetErratic = 0;
@@ -116,8 +126,8 @@ export default function Orb({ state, getAudioLevel }: OrbProps) {
           targetErratic = 0.5; // organic shifting
           break;
         case 'SPEAKING': {
-          if (getAudioLevel) {
-            currentAudioLvl = getAudioLevel();
+          if (audioRef.current) {
+            currentAudioLvl = audioRef.current();
           }
           // Suaviza a transição do nível de áudio (fator menor = menos brusco)
           smoothedAudioLvl += (currentAudioLvl - smoothedAudioLvl) * 0.08;
@@ -137,7 +147,7 @@ export default function Orb({ state, getAudioLevel }: OrbProps) {
       smoothedScale += (targetScale - smoothedScale) * 0.1;
 
       // Integrador de fase: avança continuamente baseado na velocidade atual (nunca retrocede ou salta)
-      globalPhase += 0.01 * smoothedSpeedMult;
+      globalPhase += 0.01 * step * smoothedSpeedMult;
 
       ctx.clearRect(0, 0, size, size);
 
@@ -312,15 +322,23 @@ export default function Orb({ state, getAudioLevel }: OrbProps) {
 
       ctx.restore();
 
-      animationFrameId = requestAnimationFrame(render);
+      if (animated && !reducedMotion.matches && !document.hidden) animationFrameId = requestAnimationFrame(render);
     };
 
+    const restart = () => {
+      cancelAnimationFrame(animationFrameId);
+      previousTime = 0;
+      render();
+    };
     render();
-
+    document.addEventListener('visibilitychange', restart);
+    reducedMotion.addEventListener('change', restart);
     return () => {
       cancelAnimationFrame(animationFrameId);
+      document.removeEventListener('visibilitychange', restart);
+      reducedMotion.removeEventListener('change', restart);
     };
-  }, []);
+  }, [animated]);
 
   return (
     <div className="orb-wrapper" style={{ display: 'inline-flex', justifyContent: 'center', alignItems: 'center' }}>

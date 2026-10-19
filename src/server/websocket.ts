@@ -1,3 +1,4 @@
+import { LocalMicrophoneCapture } from '../voice/local-microphone.js';
 import { visualGenerator } from '../presentation/visual-generator.js';
 import { isVisualRequest } from '../presentation/visual-intent.js';
 import { createHash } from 'node:crypto';
@@ -49,6 +50,14 @@ export class JasperWebSocketServer {
   private clientIps = new Map<WebSocket, string>();
   private clientRequests = new WeakMap<WebSocket, { headers: import('node:http').IncomingHttpHeaders }>();
   private pendingAccessClients = new Map<string, WebSocket>();
+  private localMicrophone = new LocalMicrophoneCapture<WebSocket>({
+    onStatus:(client,active,error)=>this.sendToClient(client,{type:'LOCAL_MIC_STATUS',active,error}),
+    onAudio:(client,pcm)=>{
+      if(!this.masterClients.has(client)||!this.voiceSessions.has(client)){this.localMicrophone.stop(client);return;}
+      if(['SPEAKING','PROCESSING'].includes(wakeWordManager.getState()))return;
+      void withSceneSession(this.visualSession(client),()=>this.handleClientMessage(client,{type:'PCM_AUDIO_CHUNK',base64Pcm:pcm.toString('base64')})).catch(()=>this.localMicrophone.stop(client,'A conexão de voz falhou. Tente ativar o microfone novamente.'));
+    },
+  });
 
 
   public async refreshVoice(): Promise<void> { await this.geminiLive?.reloadPersonality(); }
@@ -338,6 +347,7 @@ export class JasperWebSocketServer {
       });
 
       ws.on('close', () => {
+        this.localMicrophone.stop(ws);
         sceneSessions.clear(this.visualSession(ws));
         this.unansweredLiveRequests.delete(ws);
         visualGenerator.cancel(this.visualSession(ws));
@@ -742,6 +752,14 @@ export class JasperWebSocketServer {
         }
         break;
       }
+      case 'START_LOCAL_MIC': {
+        if(!this.masterClients.has(ws)){this.sendToClient(ws,{type:'LOCAL_MIC_STATUS',active:false,error:'Somente o computador principal pode ativar o WO Mic do notebook.'});break;}
+        if(!this.geminiLive?.isLiveConnected()){this.sendToClient(ws,{type:'LOCAL_MIC_STATUS',active:false,error:'O serviço de voz está reconectando. Tente novamente em instantes.'});break;}
+        if(this.localMicrophone.busy(ws)||!this.adoptVoiceClient(ws)||!this.localMicrophone.start(ws))this.sendToClient(ws,{type:'LOCAL_MIC_STATUS',active:false,error:'O microfone está em uso por outra conversa.'});
+        break;
+      }
+      case 'STOP_LOCAL_MIC': this.localMicrophone.stop(ws);break;
+      case 'PAUSE_LOCAL_MIC': this.localMicrophone.pause(ws,payload.paused===true);break;
       case 'PCM_AUDIO_CHUNK': {
         if (!base64Pcm) return;
         if(this.activeClient&&this.activeClient!==ws&&wakeWordManager.getState()!=='IDLE')return;

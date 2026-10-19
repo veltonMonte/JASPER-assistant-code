@@ -1,83 +1,29 @@
-import React, { useState, useEffect } from "react";
-import { Menu, Smartphone, Laptop, Activity } from "lucide-react";
-import { JasperState } from "../hooks/useJasperWebSocket";
+import { useEffect, useState } from 'react'
+import { Laptop, Smartphone, SlidersHorizontal } from 'lucide-react'
+import type { JasperState } from '../hooks/useJasperWebSocket'
 
-export interface HeaderProps {
-  isConnected: boolean;
-  state: JasperState;
-  activeMic?: "womic" | "notebook";
-  onToggleSidebar: () => void;
+interface HeaderProps {
+  isConnected: boolean
+  state: JasperState
+  activeMic?: 'womic' | 'notebook'
+  onToggleSidebar: () => void
 }
 
-const Header: React.FC<HeaderProps> = ({ isConnected, state, activeMic = "notebook", onToggleSidebar }) => {
-  const [timeStr, setTimeStr] = useState("");
-
+export default function Header({ isConnected, activeMic = 'notebook', onToggleSidebar }: HeaderProps) {
+  const [now, setNow] = useState(() => new Date())
   useEffect(() => {
-    const updateTime = () => {
-      const now = new Date();
-      setTimeStr(now.toTimeString().split(" ")[0]);
-    };
-    updateTime();
-    const timer = setInterval(updateTime, 1000);
-    return () => clearInterval(timer);
-  }, []);
-
+    const timer = window.setInterval(() => setNow(new Date()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
   return (
-    <header className="header hud-header">
-      <div className="header-left">
-        <button className="menu-button hud-btn-corner" onClick={onToggleSidebar} aria-label="Toggle Sidebar" title="Painel de Controle e Personalidade">
-          <Menu size={16} />
-          <span className="btn-bracket tl"></span>
-          <span className="btn-bracket br"></span>
-        </button>
-
-        <div className="logo-container">
-          <div className="logo-row">
-            <h1 className="logo-text">JASPER</h1>
-            <span className="hud-badge-version">v2.5 // TARS-LIVE</span>
-          </div>
-          <div className="hud-telemetry-row">
-            <span className="telemetry-item"><span className="telemetry-dot"></span>SYS.ONLINE</span>
-            <span className="telemetry-sep">/</span>
-            <span className="telemetry-item"><span className="telemetry-code">0x7F00_0001</span></span>
-          </div>
-        </div>
-      </div>
-
-      <div className="header-center-telemetry">
-        <div className="hud-clock-box">
-          <span className="hud-clock-label">SYS.TIME</span>
-          <span className="hud-clock-val">{timeStr || "--:--:--"}</span>
-        </div>
-        <div className="hud-state-indicator" data-state={state}>
-          <Activity size={12} className="state-pulse-icon" />
-          <span className="state-text">{state}</span>
-        </div>
-      </div>
-
+    <header className="header">
+      <div className="header-left"><div className="logo-container"><h1 className="logo-text">JASPER<span className="brand-period">.</span></h1><span className="subtitle">Assistente pessoal</span></div><span className="header-divider" /><span className="workspace-name">Visão geral</span></div>
       <div className="header-right">
-        <div 
-          className={`mic-pill hud-pill ${activeMic}`} 
-          title={activeMic === "womic" ? "WO Mic (Celular) via PipeWire roteado" : "Microfone integrado do notebook ativo"}
-        >
-          {activeMic === "womic" ? <Smartphone size={13} className="mic-icon-active" /> : <Laptop size={13} />}
-          <span className="label">{activeMic === "womic" ? "WO MIC // LINK" : "NOTEBOOK // MIC"}</span>
-          <span className="mic-signal-waves">
-            <span className="wave w1"></span>
-            <span className="wave w2"></span>
-          </span>
-        </div>
-
-        <div className={`status-pill hud-pill ${isConnected ? "online" : "offline"}`}>
-          <span className="hud-radar-dot">
-            <span className="radar-core"></span>
-            <span className="radar-ping"></span>
-          </span>
-          <span className="label">{isConnected ? "QUANTUM LINK" : "DISCONNECTED"}</span>
-        </div>
+        <time className="header-clock" dateTime={now.toISOString()}><span>{now.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' }).replace('.', '')}</span>{now.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</time>
+        <span className="mic-source" title="Fonte de áudio selecionada">{activeMic === 'womic' ? <Smartphone size={14} /> : <Laptop size={14} />}<span>{activeMic === 'womic' ? 'WO Mic' : 'Notebook'}</span></span>
+        <span className={`connection-status ${isConnected ? 'connected' : ''}`}><i />{isConnected ? 'Conectado' : 'Sem conexão'}</span>
+        <button className="header-settings" onClick={onToggleSidebar} aria-label="Abrir controles" title="Abrir controles"><SlidersHorizontal size={18} /></button>
       </div>
     </header>
-  );
-};
-
-export default Header;
+  )
+}

@@ -319,7 +319,7 @@ export class GeminiBrain {
       toolsExecuted.push('renderizar_grafico');
       text = `Aqui está a estrutura gráfica solicitada:\n\n\`\`\`recharts\n${chartConfig}\n\`\`\``;
     } else {
-      text = `Compreendido! Recebi sua mensagem: "${userPrompt}". O assistente JASPER está pronto.`;
+      text = 'Não consegui me conectar para responder agora. Pode tentar de novo daqui a pouco?';
     }
 
     return {

@@ -1,69 +1,19 @@
-import React from "react";
-import { Search, Monitor, Terminal, BarChart2 } from "lucide-react";
+import { ArrowUpRight, Boxes, Monitor, Terminal, ChartNoAxesCombined } from 'lucide-react'
 
-export interface SuggestionsProps {
-  onSelect: (cmd: string) => void;
+const ITEMS = [
+  { label: 'Apresente uma ideia', description: 'Diagramas e modelos 3D', command: 'Jasper, me explique o fluxo de uma API em uma apresentação visual narrada', icon: Boxes },
+  { label: 'Veja além dos dados', description: 'Transforme em gráficos', command: 'Crie um gráfico de exemplo com os valores 12, 28 e 43 para Janeiro, Fevereiro e Março', icon: ChartNoAxesCombined },
+  { label: 'Seu espaço, conectado', description: 'Ligue seu computador', command: 'JASPER, ligar meu computador', icon: Monitor },
+  { label: 'Tudo sob controle', description: 'Consulte seu sistema', command: 'Verifique o uso de memória e CPU no terminal', icon: Terminal },
+]
+export default function Suggestions({ onSelect, disabled = false }: { onSelect: (cmd: string) => void; disabled?: boolean }) {
+  return <section className="suggestions-container" aria-label="Atalhos para começar">
+    <div className="suggestions-heading"><span>POR ONDE COMEÇAMOS?</span><span>Algumas possibilidades</span></div>
+    <div className="suggestions-grid">{ITEMS.map(({ label, description, command, icon: Icon }, index) => (
+      <button key={label} className="suggestion-btn" onClick={() => onSelect(command)} disabled={disabled} style={{ animationDelay: `${index * 65 + 180}ms` }}>
+        <div className="suggestion-icon-row"><Icon size={18} strokeWidth={1.5} /><ArrowUpRight className="suggestion-arrow" size={15} /></div>
+        <span className="suggestion-label">{label}</span><span className="suggestion-description">{description}</span>
+      </button>
+    ))}</div>
+  </section>
 }
-
-const SUGGESTION_ITEMS = [
-  {
-    id: "01",
-    label: "Pesquisar na Web",
-    cmd: "Pesquise na web as últimas notícias de tecnologia",
-    icon: Search,
-    code: "NET.QUERY"
-  },
-  {
-    id: "02",
-    label: "Gerar Gráfico",
-    cmd: "Crie um gráfico comparando as linguagens de programação mais populares",
-    icon: BarChart2,
-    code: "DATA.RECHARTS"
-  },
-  {
-    id: "03",
-    label: "Ligar Computador",
-    cmd: "JASPER, ligar meu computador",
-    icon: Monitor,
-    code: "WOL.MAGIC"
-  },
-  {
-    id: "04",
-    label: "Status do Sistema",
-    cmd: "Verifique o uso de memória e CPU no terminal",
-    icon: Terminal,
-    code: "SYS.TELEMETRY"
-  }
-];
-
-const Suggestions: React.FC<SuggestionsProps> = ({ onSelect }) => {
-  return (
-    <div className="suggestions-container hud-suggestions-container">
-      <div className="suggestions-grid hud-suggestions-grid">
-        {SUGGESTION_ITEMS.map((item) => {
-          const Icon = item.icon;
-          return (
-            <button
-              key={item.id}
-              className="suggestion-btn hud-suggestion-card"
-              onClick={() => onSelect(item.cmd)}
-            >
-              <div className="card-brackets">
-                <span className="bracket tl"></span>
-                <span className="bracket br"></span>
-              </div>
-              <div className="suggestion-header">
-                <span className="suggestion-code">[{item.id}] // {item.code}</span>
-                <Icon size={14} className="suggestion-icon" />
-              </div>
-              <span className="suggestion-label">{item.label}</span>
-              <div className="suggestion-sweep"></div>
-            </button>
-          );
-        })}
-      </div>
-    </div>
-  );
-};
-
-export default Suggestions;

@@ -304,7 +304,7 @@ export function useJasperWebSocket(): UseJasperReturn {
   const presentationOpenRef = useRef(false);
   const presentationNarratingRef = useRef(false);
   const presentationReadyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const setPresentationNarrating = useCallback((value: boolean) => { presentationNarratingRef.current = value; }, []);
+  const setPresentationNarrating = useCallback((value: boolean) => { presentationNarratingRef.current = value; if(localMicrophoneRef.current&&wsRef.current?.readyState===WebSocket.OPEN)wsRef.current.send(JSON.stringify({type:'PAUSE_LOCAL_MIC',paused:value||['SPEAKING','PROCESSING'].includes(stateRef.current)})); }, []);
   const closePresentation = useCallback(() => {
     if (presentationReadyTimerRef.current) clearTimeout(presentationReadyTimerRef.current);
     presentationReadyTimerRef.current = null;
@@ -368,6 +368,7 @@ export function useJasperWebSocket(): UseJasperReturn {
   const micStartingRef = useRef(false);
   const micGenerationRef = useRef(0);
   const liveCaptureRef = useRef(false);
+  const localMicrophoneRef = useRef(false);
   const discardRecordingRef = useRef(false);
 
   // Microphone Capture
@@ -663,6 +664,12 @@ export function useJasperWebSocket(): UseJasperReturn {
             if (stateRef.current === 'IDLE' && !presentationOpenRef.current && !clientBusyRef.current && !document.hidden && Date.now() - lastInteractionRef.current > 10_000 && audioUnlockedRef.current) speakTextRef.current(notice.text);
             break;
           }
+          case 'LOCAL_MIC_STATUS':
+            localMicrophoneRef.current=!!data.active;
+            micStartingRef.current=false;
+            setIsMicActive(!!data.active);setIsMicStarting(false);
+            if(data.error)setMessages(previous=>[...previous,{id:createMessageId(),sender:'system',text:data.error}]);
+            break;
           case 'MIC_STATUS':
             if (data.activeMic === 'womic' || data.activeMic === 'notebook') {
               setActiveMic(data.activeMic);
@@ -893,6 +900,7 @@ export function useJasperWebSocket(): UseJasperReturn {
 
     ws.onclose = () => {
       voiceSessionTokenRef.current = '';
+      localMicrophoneRef.current=false;
       setIsConnected(false);
       setAuthStatus({ isChecking: true, isMaster: false, isAuthorized: false, isPending: false });
       geminiLiveConnectedRef.current = false;
@@ -962,6 +970,10 @@ export function useJasperWebSocket(): UseJasperReturn {
     return () => { window.clearInterval(timer); document.removeEventListener('visibilitychange', sendPresence); };
   }, [isConnected, state, proactiveAudioReady, activeAlarm]);
 
+  useEffect(()=>{
+    if(localMicrophoneRef.current&&wsRef.current?.readyState===WebSocket.OPEN)wsRef.current.send(JSON.stringify({type:'PAUSE_LOCAL_MIC',paused:['SPEAKING','PROCESSING'].includes(state)||presentationNarratingRef.current||presentationPendingRef.current}));
+  },[state,presentationOpen,presentationReady]);
+
   const sendText = useCallback((text: string) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;
     presentationPendingRef.current = false;
@@ -978,7 +990,9 @@ export function useJasperWebSocket(): UseJasperReturn {
     micGenerationRef.current++;
     micStartingRef.current = false;
     discardRecordingRef.current = !submit;
-    const wasLive = liveCaptureRef.current;
+    const wasLive = liveCaptureRef.current || localMicrophoneRef.current;
+    if(localMicrophoneRef.current&&wsRef.current?.readyState===WebSocket.OPEN)wsRef.current.send(JSON.stringify({type:'STOP_LOCAL_MIC'}));
+    localMicrophoneRef.current=false;
     liveCaptureRef.current = false;
     setIsMicActive(false);
     setIsMicStarting(false);
@@ -1154,7 +1168,7 @@ export function useJasperWebSocket(): UseJasperReturn {
       void automaticMicRef.current.resume({
         enabled: microphoneEnabled && typeof navigator.mediaDevices?.getUserMedia === 'function', connected: isConnected, authorized: authStatus.isAuthorized,
         liveReady: geminiLiveReady, visible: !document.hidden,
-        capturing: !!mediaStreamRef.current || micStartingRef.current,
+        capturing: localMicrophoneRef.current || !!mediaStreamRef.current || micStartingRef.current,
       }, startLiveStreaming);
     };
     resumeMicrophone();
@@ -1167,7 +1181,7 @@ export function useJasperWebSocket(): UseJasperReturn {
   }, [microphoneEnabled, isConnected, authStatus.isAuthorized, geminiLiveReady, isMicActive, startLiveStreaming]);
 
   const toggleMic = useCallback(() => {
-    if (mediaStreamRef.current || micStartingRef.current) {
+    if (mediaStreamRef.current || micStartingRef.current || localMicrophoneRef.current) {
       setMicrophoneEnabled(false);
       try { localStorage.setItem('jasper_microphone_paused', 'true'); } catch {}
       stopRecording();
@@ -1180,12 +1194,16 @@ export function useJasperWebSocket(): UseJasperReturn {
       initAudioContext();
       userVoiceMessageIdRef.current = null;
       setTranscript('');
+      if(authStatus.isMaster&&activeMic==='womic'){
+        localMicrophoneRef.current=true;micStartingRef.current=true;setIsMicStarting(true);
+        wsRef.current.send(JSON.stringify({type:'START_LOCAL_MIC'}));return;
+      }
       if (geminiLiveConnectedRef.current) void automaticMicRef.current.resume({
         enabled: true, connected: true, authorized: true, liveReady: true, visible: true, capturing: false,
       }, startLiveStreaming);
       else void startBlobRecording();
     }
-  }, [authStatus.isAuthorized, stopRecording, stopAllAudio, initAudioContext, startLiveStreaming, startBlobRecording]);
+  }, [authStatus.isAuthorized, authStatus.isMaster, activeMic, stopRecording, stopAllAudio, initAudioContext, startLiveStreaming, startBlobRecording]);
 
   const sendTerminalApproval = useCallback((id: string, approved: boolean, customCommand?: string, remember?: boolean) => {
     if (!wsRef.current || wsRef.current.readyState !== WebSocket.OPEN) return;

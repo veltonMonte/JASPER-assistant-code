@@ -3,7 +3,7 @@
  * 
  * A voz principal do JASPER vem diretamente do Gemini Live API (áudio PCM nativo).
  * Este módulo existe apenas como fallback extremo caso o Gemini Live não esteja disponível.
- * Nesse caso, o cliente usará a Web Speech API (speechSynthesis) do navegador.
+ * Nesse caso, o cliente solicita um WAV de voz natural ao endpoint /api/voice/speak.
  */
 
 export interface TTSResult {
@@ -15,11 +15,11 @@ export interface TTSResult {
 export class TextToSpeechHandler {
   /**
    * Fallback mínimo - retorna null para audioBase64
-   * O cliente usará speechSynthesis do navegador como último recurso
+   * O cliente usa a voz Gemini configurada, sem sintetizador robótico do navegador
    */
   public async synthesize(text: string): Promise<TTSResult> {
     const startTime = Date.now();
-    console.log(`🔊 [TTS Fallback] Áudio será sintetizado pelo navegador para: "${text.substring(0, 50)}..."`);
+    console.log(`🔊 [TTS Fallback] Áudio natural será solicitado pelo cliente para: "${text.substring(0, 50)}..."`);
 
     return {
       audioBase64: null,

@@ -1,103 +1,37 @@
-import React, { useState, useRef } from "react";
-import { Mic, Send } from "lucide-react";
+import React, { useEffect, useRef, useState } from 'react'
+import { ArrowUp, Mic, Square } from 'lucide-react'
 
-export interface InputBarProps {
-  onSendText: (text: string) => void;
-  onToggleMic: () => void;
-  isListening: boolean;
+interface InputBarProps {
+  onSendText: (text: string) => void
+  onToggleMic: () => void
+  isListening: boolean
+  isMicStarting: boolean
+  isVoiceReady: boolean
+  canUseLocalMicrophone?: boolean
+  isConnected: boolean
 }
 
-const InputBar: React.FC<InputBarProps> = ({ onSendText, onToggleMic, isListening }) => {
-  const [text, setText] = useState("");
-  const [isSending, setIsSending] = useState(false);
-  const [isFocused, setIsFocused] = useState(false);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-
-  const triggerSend = () => {
-    const trimmed = text.trim();
-    if (!trimmed) return;
-    setIsSending(true);
-    setTimeout(() => {
-      onSendText(trimmed);
-      setText("");
-      setIsSending(false);
-    }, 120);
-  };
-
-  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
-      e.preventDefault();
-      triggerSend();
-    }
-  };
-
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    triggerSend();
-  };
-
-  const hasText = text.trim().length > 0;
-
-  return (
-    <footer className="input-bar hud-input-bar">
-      <div className={`input-wrapper hud-input-wrapper ${isFocused ? "focused" : ""} ${isListening ? "listening" : ""}`}>
-        {/* Sci-fi Corner Brackets */}
-        <span className="input-bracket tl"></span>
-        <span className="input-bracket tr"></span>
-        <span className="input-bracket bl"></span>
-        <span className="input-bracket br"></span>
-
-        <button
-          type="button"
-          className={`input-btn mic hud-mic-btn ${isListening ? "active" : ""}`}
-          onClick={onToggleMic}
-          aria-label="Toggle Microphone"
-          title={isListening ? "Microfone ativado - Ouvindo sua voz" : "Ativar microfone"}
-        >
-          {isListening ? (
-            <div className="mic-listening-visualizer">
-              <span className="visualizer-bar bar1"></span>
-              <span className="visualizer-bar bar2"></span>
-              <span className="visualizer-bar bar3"></span>
-              <span className="visualizer-bar bar4"></span>
-              <span className="mic-radar-wave"></span>
-            </div>
-          ) : (
-            <Mic size={18} />
-          )}
-        </button>
-
-        <textarea
-          ref={textareaRef}
-          className="input-field hud-input-field"
-          placeholder={isListening ? "Ouvindo... fale seu comando ou pergunta..." : "Transmitir comando ou mensagem para o JASPER..."}
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          onKeyDown={handleKeyDown}
-          onFocus={() => setIsFocused(true)}
-          onBlur={() => setIsFocused(false)}
-          rows={1}
-        />
-
-        <button
-          type="button"
-          onClick={handleSubmit}
-          className={`input-btn send hud-send-btn ${hasText ? "has-text" : ""} ${isSending ? "sending" : ""}`}
-          aria-label="Send Message"
-          disabled={!hasText}
-          title="Transmitir mensagem (Enter)"
-        >
-          <Send size={16} className={`send-icon ${isSending ? "rocket" : ""}`} />
-          <span className="send-glow-ripple"></span>
-        </button>
-      </div>
-
-      <div className="input-telemetry-hint">
-        <span className="hint-label">COMMAND.IN //</span>
-        <span className="hint-text">PRESS [ENTER] TO EXECUTE · [SHIFT+ENTER] MULTILINE</span>
-      </div>
-    </footer>
-  );
-};
-
-export default InputBar;
+export default function InputBar({ onSendText, onToggleMic, isListening, isMicStarting, isVoiceReady, isConnected, canUseLocalMicrophone = false }: InputBarProps) {
+  const microphoneAvailable = canUseLocalMicrophone || typeof navigator.mediaDevices?.getUserMedia === 'function'
+  const [text, setText] = useState('')
+  const inputRef = useRef<HTMLTextAreaElement>(null)
+  useEffect(() => {
+    const input = inputRef.current
+    if (input) { input.style.height = '24px'; input.style.height = `${Math.min(input.scrollHeight, 120)}px` }
+  }, [text])
+  const submit = () => {
+    if (!text.trim() || !isConnected) return
+    onSendText(text.trim())
+    setText('')
+  }
+  return <footer className="input-bar">
+    <form className={`input-wrapper ${isListening ? 'listening' : ''}`} onSubmit={e => { e.preventDefault(); submit() }}>
+      <span className="composer-symbol" aria-hidden="true">/</span>
+      <textarea id="message-input" ref={inputRef} className="input-field" aria-label="Mensagem para o Jasper" placeholder={isListening ? 'Estou ouvindo. Pode falar…' : 'O que vamos fazer agora?'} value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); submit() } }} rows={1} />
+      <button type="button" className={`input-btn mic ${isListening || isMicStarting ? 'active' : ''}`} onClick={onToggleMic} disabled={!isConnected || !microphoneAvailable} aria-label={isMicStarting ? 'Cancelar ativação do microfone' : isListening ? 'Parar de ouvir' : 'Ativar microfone'} aria-pressed={isListening || isMicStarting} title={!microphoneAvailable ? 'O microfone exige HTTPS ao acessar pelo IP' : isMicStarting ? 'Aguardando permissão do microfone' : isListening ? 'Parar de ouvir' : 'Conversar por voz'}>{isListening || isMicStarting ? <Square size={15} fill="currentColor" /> : <Mic size={19} />}</button>
+      <span className="input-divider" />
+      <button type="submit" className="input-btn send" aria-label="Enviar mensagem" title="Enviar mensagem (Enter)" disabled={!text.trim() || !isConnected}><ArrowUp size={20} /></button>
+    </form>
+    <div className="input-hint"><span>{!isConnected ? 'Reconectando ao Jasper. Sua mensagem será mantida aqui.' : !microphoneAvailable ? 'Texto disponível. Para usar o microfone pelo IP, abra o Jasper com HTTPS.' : isMicStarting ? 'Aguardando permissão do microfone no navegador…' : isListening ? 'Microfone ativo · Toque no quadrado para encerrar' : !isVoiceReady ? 'Serviço de voz reconectando. Você pode escrever enquanto isso.' : 'Toque no microfone para falar ou escreva sua mensagem'}</span><span className="keyboard-hint"><kbd>↵</kbd> enviar <span>·</span> <kbd>shift ↵</kbd> nova linha</span></div>
+  </footer>
+}

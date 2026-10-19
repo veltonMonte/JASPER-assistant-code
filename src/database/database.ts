@@ -9,12 +9,12 @@ export interface PersonalityConfig {
 }
 
 export const DEFAULT_PERSONALITY: PersonalityConfig = {
-  humor: 60,
-  honestidade: 90,
-  sarcasmo: 40,
-  formalidade: 30,
-  verbosidade: 50,
-  empatia: 70,
+  humor: 45,
+  honestidade: 95,
+  sarcasmo: 55,
+  formalidade: 70,
+  verbosidade: 35,
+  empatia: 75,
 };
 
 import sqlite3 from 'sqlite3';
@@ -49,6 +49,24 @@ class DatabaseManager {
         }
         console.log('✅ Schema de tabelas SQLite verificado/criado com sucesso.');
         resolve();
+      });
+    });
+  }
+
+  public getSetting(key: string): Promise<string | null> {
+    return new Promise((resolve, reject) => {
+      if (!this.db) return reject(new Error('Database not initialized'));
+      this.db.get('SELECT value FROM assistant_settings WHERE key = ?', [key], (error, row: { value: string } | undefined) => {
+        if (error) reject(error); else resolve(row?.value || null);
+      });
+    });
+  }
+
+  public saveSetting(key: string, value: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!this.db) return reject(new Error('Database not initialized'));
+      this.db.run('INSERT INTO assistant_settings (key, value, updated_at) VALUES (?, ?, CURRENT_TIMESTAMP) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = CURRENT_TIMESTAMP', [key, value], error => {
+        if (error) reject(error); else resolve();
       });
     });
   }
@@ -252,6 +270,98 @@ class DatabaseManager {
       await this.setPersonalityTrait(trait, val);
     }
     return { ...DEFAULT_PERSONALITY };
+  }
+
+
+  // --- Operações com Dispositivos e Segurança de Acesso ---
+
+  public getDeviceById(deviceId: string): Promise<any | null> {
+    return new Promise((resolve, reject) => {
+      if (!this.db) return resolve(null);
+      this.db.get("SELECT * FROM authorized_devices WHERE device_id = ?", [deviceId], (err, row) => {
+        if (err) return reject(err);
+        resolve(row || null);
+      });
+    });
+  }
+
+  public getDeviceByToken(token: string): Promise<any | null> {
+    return new Promise((resolve, reject) => {
+      if (!this.db) return resolve(null);
+      this.db.get("SELECT * FROM authorized_devices WHERE auth_token = ? AND status = 'approved'", [token], (err, row) => {
+        if (err) return reject(err);
+        resolve(row || null);
+      });
+    });
+  }
+
+  public saveDeviceRequest(deviceId: string, deviceName: string, ip: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!this.db) return resolve();
+      const query = `
+        INSERT INTO authorized_devices (device_id, device_name, status, ip_address, updated_at)
+        VALUES (?, ?, 'pending', ?, CURRENT_TIMESTAMP)
+        ON CONFLICT(device_id) DO UPDATE SET
+          device_name = excluded.device_name,
+          ip_address = excluded.ip_address,
+          status = 'pending',
+          updated_at = CURRENT_TIMESTAMP
+      `;
+      this.db.run(query, [deviceId, deviceName, ip], (err) => {
+        if (err) return reject(err);
+        resolve();
+      });
+    });
+  }
+
+  public approveDevice(deviceId: string, authToken: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!this.db) return resolve();
+      const query = `
+        UPDATE authorized_devices
+        SET status = 'approved', auth_token = ?, approved_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+        WHERE device_id = ?
+      `;
+      this.db.run(query, [authToken, deviceId], (err) => {
+        if (err) return reject(err);
+        resolve();
+      });
+    });
+  }
+
+  public denyDevice(deviceId: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!this.db) return resolve();
+      const query = `
+        UPDATE authorized_devices
+        SET status = 'denied', auth_token = NULL, updated_at = CURRENT_TIMESTAMP
+        WHERE device_id = ?
+      `;
+      this.db.run(query, [deviceId], (err) => {
+        if (err) return reject(err);
+        resolve();
+      });
+    });
+  }
+
+  public listAuthorizedDevices(): Promise<any[]> {
+    return new Promise((resolve, reject) => {
+      if (!this.db) return resolve([]);
+      this.db.all("SELECT id, device_id, device_name, status, ip_address, approved_at, created_at FROM authorized_devices ORDER BY created_at DESC", [], (err, rows) => {
+        if (err) return reject(err);
+        resolve(rows || []);
+      });
+    });
+  }
+
+  public removeDevice(deviceId: string): Promise<void> {
+    return new Promise((resolve, reject) => {
+      if (!this.db) return resolve();
+      this.db.run("DELETE FROM authorized_devices WHERE device_id = ?", [deviceId], (err) => {
+        if (err) return reject(err);
+        resolve();
+      });
+    });
   }
 
 }

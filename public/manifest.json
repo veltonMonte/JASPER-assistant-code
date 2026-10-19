@@ -1,21 +1,17 @@
 {
-  "name": "JASPER Assistant",
+  "name": "Jasper — Assistente pessoal",
   "short_name": "JASPER",
   "start_url": "./index.html",
   "display": "standalone",
-  "background_color": "#0d1117",
-  "theme_color": "#0d1117",
-  "description": "JASPER AI Personal Assistant",
+  "background_color": "#0b0d10",
+  "theme_color": "#0b0d10",
+  "description": "Seu assistente pessoal de voz e texto.",
   "icons": [
     {
-      "src": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23FF5C00'/></svg>",
-      "sizes": "192x192",
-      "type": "image/svg+xml"
-    },
-    {
-      "src": "data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><circle cx='50' cy='50' r='50' fill='%23FF5C00'/></svg>",
-      "sizes": "512x512",
-      "type": "image/svg+xml"
+      "src": "/jasper-mark.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
     }
   ]
 }

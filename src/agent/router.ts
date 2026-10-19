@@ -134,17 +134,7 @@ export class IntentRouter {
       };
     }
 
-    // 4. INTENÇÃO: Saudação Simples
-    if (
-      /^(jasper,?\s*)?(olá|oi|bom dia|boa tarde|boa noite|tudo bem)\??$/i.test(cleanText)
-    ) {
-      return {
-        handledDirectly: true,
-        intentName: 'GREETING',
-        responseSpeech: 'Olá! Como posso ajudar você hoje?',
-        durationMs: Date.now() - startTime,
-      };
-    }
+    // Cumprimentos seguem para a IA com o histórico, como o restante da conversa.
 
     // 5. INTENÇÃO: Desligar PC
     if (cleanText.includes('desligar meu pc') || cleanText.includes('desliga o pc')) {

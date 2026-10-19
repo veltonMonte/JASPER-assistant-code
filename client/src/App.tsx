@@ -11,7 +11,9 @@ import DiagnosticModal from './components/DiagnosticModal'
 import ProactivePanel from './components/ProactivePanel'
 import DeviceGatekeeperModal from "./components/DeviceGatekeeperModal"
 import DeviceApprovalBanner from "./components/DeviceApprovalBanner"
-const PresentationScreen = lazy(() => import('./components/PresentationScreen'))
+import PresentationErrorBoundary from './components/PresentationErrorBoundary'
+import { loadWithRetry } from './lib/loadWithRetry'
+const PresentationScreen = lazy(() => loadWithRetry(() => import('./components/PresentationScreen')))
 
 import { proseFromStreamingMarkdown } from './lib/streamingMarkdown'
 
@@ -24,52 +26,6 @@ const HEADINGS: Record<string, string> = {
   SPEAKING: 'Vamos em frente.', ERROR: 'Vamos reconectar.',
 }
 
-
-class PresentationErrorBoundary extends React.Component<
-  { onClose: () => void; children: React.ReactNode },
-  { hasError: boolean }
-> {
-  state = { hasError: false };
-
-  static getDerivedStateFromError() {
-    return { hasError: true };
-  }
-
-  componentDidCatch(error: Error) {
-    console.error('Falha ao renderizar apresentação visual:', error);
-  }
-
-  render() {
-    if (this.state.hasError) {
-      return (
-        <main className="presentation-screen" style={{ display: 'grid', placeItems: 'center', padding: 24, background: '#0b1017' }}>
-          <div style={{ maxWidth: 440, textAlign: 'center', color: '#dce9ef' }}>
-            <h2 style={{ fontSize: 20, marginBottom: 8, color: '#f0f5ff' }}>Estúdio Visual Temporariamente Indisponível</h2>
-            <p style={{ color: '#8aa1b1', fontSize: 14, lineHeight: 1.5, marginBottom: 16 }}>
-              Houve uma instabilidade na exibição desta apresentação. Sua conversa continua preservada.
-            </p>
-            <button
-              type="button"
-              onClick={this.props.onClose}
-              style={{
-                padding: '10px 18px',
-                borderRadius: 8,
-                background: '#5ab3cf',
-                color: '#08131a',
-                border: 'none',
-                fontWeight: 600,
-                cursor: 'pointer',
-              }}
-            >
-              Voltar para a conversa
-            </button>
-          </div>
-        </main>
-      );
-    }
-    return this.props.children;
-  }
-}
 
 export default function App() {
   const { state, isConnected, isMicActive, isMicStarting, isVoiceReady, messages, transcript, activeMic, personality, updatePersonality,
@@ -106,7 +62,7 @@ export default function App() {
       </nav>
       <div className="workspace">
         {presentationOpen && presentation ? (
-          <PresentationErrorBoundary onClose={closePresentation}>
+          <PresentationErrorBoundary resetKey={presentation.id} onClose={closePresentation}>
             <Suspense fallback={<div className="presentation-loading">Preparando estúdio visual…</div>}>
               <PresentationScreen
                 presentation={presentation}

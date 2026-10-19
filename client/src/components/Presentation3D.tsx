@@ -1,3 +1,4 @@
+import type { VisualStyle } from '../presentation/style/materials';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import type { PresentationPart, PresentationStep } from '../lib/presentation';
 import { getPresetDefinition } from '../../../shared/presentation-presets';
@@ -27,6 +28,8 @@ export default function Presentation3D({ parts = EMPTY_PARTS, step, onReady }: {
   const onReadyRef=useRef(onReady);onReadyRef.current=onReady;
   const host = useRef<HTMLDivElement>(null);
   const runtime = useRef<SceneRuntime | null>(null);
+  const [labelsVisible, setLabelsVisible] = useState(false);
+  const [style, setStyle] = useState<VisualStyle>('soft');
   const [fallback, setFallback] = useState(false);
   const [loading, setLoading] = useState(true);
   const [stats, setStats] = useState<SceneStats | null>(null);
@@ -56,12 +59,17 @@ export default function Presentation3D({ parts = EMPTY_PARTS, step, onReady }: {
   return <div className="presentation-3d-canvas" ref={host} role="img" aria-label={fallback ? `Esquema visual de ${currentStep.title}` : `Modelo 3D interativo: ${currentStep.title}`}>
     {fallback ? <FallbackScene step={currentStep} /> : <>
       {loading && <span className="scene-loading" role="status">Construindo a representação…</span>}
-      <div className="scene-quality-controls">
+      <div className="scene-quality-controls" style={{flexWrap:'wrap',maxWidth:'calc(100% - 32px)',justifyContent:'flex-end'}}>
         <button type="button" onClick={() => { const value = !rotating; setRotating(value); runtime.current?.setAutoRotate(value); }} aria-pressed={rotating}>{rotating ? 'Pausar câmera' : 'Girar câmera'}</button>
+        {(currentStep.scene || currentStep.preset === 'custom') && <>
+          <label>Visual<select aria-label="Estilo do 3D" value={style} onChange={event=>{const value=event.target.value as VisualStyle;setStyle(value);runtime.current?.setStyle(value);}}><option value="soft">Estúdio</option><option value="cartoon">Desenho</option><option value="holo">Holograma</option></select></label>
+          <button type="button" onClick={()=>runtime.current?.replayAssembly()}>Repetir montagem</button>
+          <button type="button" aria-pressed={labelsVisible} onClick={()=>{const visible=!labelsVisible;setLabelsVisible(visible);runtime.current?.setLabelsVisible(visible);}}>Legendas</button>
+        </>}
         <label>Qualidade<select aria-label="Qualidade do 3D" value={quality} onChange={event => chooseQuality(event.target.value as QualityTier)}><option value="low">Leve</option><option value="medium">Equilibrada</option><option value="high">Alta</option></select></label>
       </div>
       {debug && stats && <output className="scene-debug" aria-label="Depuração 3D">
-        {`${stats.fps.toFixed(1)} FPS · quadro ${stats.frameMs.toFixed(1)} ms · pior ${stats.worstMs.toFixed(1)} ms\nQualidade ${stats.tier} · pontos ${stats.points}/${stats.maxPoints} · desenhados ${stats.renderedPoints}\nChamadas ${stats.calls} · geometrias ${stats.geometries} · texturas ${stats.textures}\nContextos ${stats.contexts} · geração ${stats.generationMs.toFixed(1)} ms${stats.heapMB ? ` · memória JS ${stats.heapMB.toFixed(1)} MB` : ''}\n${stats.history.join(' → ')}`}
+        {`${stats.fps.toFixed(1)} FPS · quadro ${stats.frameMs.toFixed(1)} ms · pior ${stats.worstMs.toFixed(1)} ms\nQualidade ${stats.tier} · pontos ${stats.points}/${stats.maxPoints} · desenhados ${stats.renderedPoints}\nTriângulos ${stats.triangles} · chamadas ${stats.calls} · geometrias ${stats.geometries} · texturas ${stats.textures}\nContextos ${stats.contexts} · montagem local ${stats.generationMs.toFixed(1)} ms${stats.heapMB ? ` · memória JS ${stats.heapMB.toFixed(1)} MB` : ''}\n${stats.history.join(' → ')}`}
       </output>}
     </>}
   </div>;

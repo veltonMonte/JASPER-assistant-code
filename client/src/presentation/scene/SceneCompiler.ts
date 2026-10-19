@@ -1,12 +1,15 @@
 import * as THREE from 'three';
 import type { SceneSpec, SceneGeometryDef, SceneMaterialDef, SceneNode, SceneRepetition, SceneTransform } from '../../../../shared/scene-types';
 import type { BuildContext, BuilderResult, LabelSpec } from '../presets/types';
+import { MaterialLibrary, type VisualStyle } from '../style/materials';
+import { softBox } from '../style/geometry';
+import { createAssembly } from '../style/assembly';
 import { disposeObject } from '../runtime/resources';
 
-function geometry(def:SceneGeometryDef,segments:number):THREE.BufferGeometry {
+function geometry(def:SceneGeometryDef,segments:number,rounded=true):THREE.BufferGeometry {
   const seg=(n:number|undefined,fallback:number,min=3)=>Math.max(min,Math.min(n||fallback,segments));
   switch(def.type){
-    case 'box':return new THREE.BoxGeometry(def.width,def.height,def.depth);
+    case 'box':return softBox(def.width,def.height,def.depth,rounded);
     case 'sphere':return new THREE.SphereGeometry(def.radius,seg(def.widthSegments,24),seg(def.heightSegments,16));
     case 'cylinder':return new THREE.CylinderGeometry(def.radiusTop,def.radiusBottom,def.height,seg(def.radialSegments,24));
     case 'cone':return new THREE.ConeGeometry(def.radius,def.height,seg(def.radialSegments,24));
@@ -24,10 +27,6 @@ function geometry(def:SceneGeometryDef,segments:number):THREE.BufferGeometry {
       const result=new THREE.BufferGeometry();result.setAttribute('position',new THREE.Float32BufferAttribute(def.vertices.flat(),3));result.setIndex(def.faces.flat());result.computeVertexNormals();return result;
     }
   }
-}
-function material(def:SceneMaterialDef):THREE.MeshStandardMaterial {
-  const opacity=def.opacity??1;
-  return new THREE.MeshStandardMaterial({color:def.color,roughness:def.roughness??.55,metalness:def.metalness??.1,emissive:def.emissive||'#000000',emissiveIntensity:def.emissiveIntensity??0,opacity,transparent:opacity<1||def.transparent===true,depthWrite:opacity>=1,wireframe:def.wireframe||false,side:THREE.DoubleSide});
 }
 function matrix(transform:SceneTransform):THREE.Matrix4 {
   return new THREE.Matrix4().compose(new THREE.Vector3(...(transform.position||[0,0,0])),new THREE.Quaternion().setFromEuler(new THREE.Euler(...(transform.rotation||[0,0,0]),'XYZ')),new THREE.Vector3(...(transform.scale||[1,1,1])));
@@ -50,11 +49,12 @@ export function repetitionMatrices(repetition?:SceneRepetition):THREE.Matrix4[] 
   return result;
 }
 /** Constrói dados declarativos; nenhum código vindo do modelo é executado. */
-export async function compileScene(scene:SceneSpec,ctx:Pick<BuildContext,'group'|'quality'|'signal'>):Promise<BuilderResult> {
+export async function compileScene(scene:SceneSpec,ctx:Pick<BuildContext,'group'|'quality'|'signal'> & {style?:VisualStyle;motion?:boolean}):Promise<BuilderResult> {
   const {group,quality,signal}=ctx;
-  const geometries=new Map<string,THREE.BufferGeometry>(),materials=new Map<string,THREE.MeshStandardMaterial>();
-  const batches=new Map<string,{geometry:THREE.BufferGeometry;material:THREE.MeshStandardMaterial;matrices:THREE.Matrix4[];ids:string[]}>();
-  const labels:LabelSpec[]=[];let slice=performance.now();
+  const library=new MaterialLibrary(ctx.style||'soft',quality.fps===30);
+  const geometries=new Map<string,THREE.BufferGeometry>(),materials=library.materials;
+  const batches=new Map<string,{geometry:THREE.BufferGeometry;material:THREE.MeshStandardMaterial|THREE.MeshToonMaterial;matrices:THREE.Matrix4[];ids:string[]}>();
+  const labels:LabelSpec[]=[];const callouts:number[]=[];let slice=performance.now();
   const yieldIfNeeded=async()=>{signal.throwIfAborted();if(performance.now()-slice>=4){await new Promise(resolve=>setTimeout(resolve,0));signal.throwIfAborted();slice=performance.now();}};
   const visit=async(node:SceneNode,parents:THREE.Matrix4[])=>{
     await yieldIfNeeded();
@@ -63,26 +63,46 @@ export async function compileScene(scene:SceneSpec,ctx:Pick<BuildContext,'group'
     const def=node.geometry||scene.geometries?.[node.geometryId||''];
     if(def){
       const matDef=node.material||scene.materials?.[node.materialId||'']||{color:'#a9cbd9'};
-      const gKey=JSON.stringify(def),mKey=JSON.stringify(matDef),key=`${gKey}|${mKey}`;
+      const gKey=JSON.stringify(def);
+      const m=library.get(matDef,node.materialId||node.name||node.id),key=`${gKey}|${m.uuid}`;
       let g=geometries.get(gKey);if(!g){g=geometry(def,quality.segments);g.computeBoundingBox();geometries.set(gKey,g);await yieldIfNeeded();}
-      let m=materials.get(mKey);if(!m){m=material(matDef);materials.set(mKey,m);}
       let batch=batches.get(key);if(!batch){batch={geometry:g,material:m,matrices:[],ids:[]};batches.set(key,batch);}
       batch.matrices.push(...worlds);batch.ids.push(...worlds.map(()=>node.id));
-      if(node.label&&labels.length<24){const anchor=new THREE.Group();anchor.matrixAutoUpdate=false;anchor.matrix.copy(worlds[0]);group.add(anchor);labels.push({text:node.label,anchor,position:[0,(g.boundingBox?.max.y||0)+.08,0]});}
+      if(node.label&&labels.length<24&&g.boundingBox){
+        const box=g.boundingBox.clone().applyMatrix4(worlds[0]),center=box.getCenter(new THREE.Vector3());
+        const lift=Math.max(.01,box.max.y-box.min.y)*.12;
+        const anchor=new THREE.Group();anchor.position.set(center.x,box.max.y+lift,center.z);group.add(anchor);
+        labels.push({text:node.label,anchor,position:[0,0,0]});
+        callouts.push(center.x,box.max.y,center.z,center.x,box.max.y+lift,center.z);
+      }
     }
-    if(!def&&node.label&&labels.length<24){const anchor=new THREE.Group();anchor.matrixAutoUpdate=false;anchor.matrix.copy(worlds[0]);group.add(anchor);labels.push({text:node.label,anchor,position:[0,.08,0]});}
     for(const child of node.children||[])await visit(child,worlds);
   };
   try {
     signal.throwIfAborted();
     for(const node of scene.nodes)await visit(node,[new THREE.Matrix4()]);
+    const triangles=(g:THREE.BufferGeometry)=>(g.index?.count??g.attributes.position.count)/3;
+    let totalTriangles=[...batches.values()].reduce((sum,b)=>sum+triangles(b.geometry)*b.matrices.length,0);
+    let totalVertices=[...batches.values()].reduce((sum,b)=>sum+b.geometry.attributes.position.count*b.matrices.length,0);
+    if(totalTriangles>60000||totalVertices>30000){
+      for(const [key,g] of geometries){
+        const def=JSON.parse(key) as SceneGeometryDef;
+        if(def.type!=='box')continue;
+        const plain=geometry(def,quality.segments,false);
+        for(const batch of batches.values())if(batch.geometry===g){totalTriangles-=(triangles(g)-triangles(plain))*batch.matrices.length;totalVertices-=(g.attributes.position.count-plain.attributes.position.count)*batch.matrices.length;batch.geometry=plain;}
+        g.dispose();geometries.set(key,plain);
+        if(totalTriangles<=60000&&totalVertices<=30000)break;
+      }
+    }
     for(const batch of batches.values()){
       await yieldIfNeeded();
-      if(batch.matrices.length===1){const mesh=new THREE.Mesh(batch.geometry,batch.material);mesh.matrixAutoUpdate=false;mesh.matrix.copy(batch.matrices[0]);mesh.userData.nodeIds=batch.ids;group.add(mesh);}
-      else {const mesh=new THREE.InstancedMesh(batch.geometry,batch.material,batch.matrices.length);batch.matrices.forEach((m,i)=>mesh.setMatrixAt(i,m));mesh.instanceMatrix.needsUpdate=true;mesh.computeBoundingBox();mesh.computeBoundingSphere();mesh.userData.nodeIds=batch.ids;group.add(mesh);}
+      if(batch.matrices.length===1){const mesh=new THREE.Mesh(batch.geometry,batch.material);mesh.matrixAutoUpdate=false;mesh.matrix.copy(batch.matrices[0]);mesh.userData.nodeIds=batch.ids;mesh.castShadow=!batch.material.transparent;mesh.receiveShadow=true;group.add(mesh);}
+      else {const mesh=new THREE.InstancedMesh(batch.geometry,batch.material,batch.matrices.length);batch.matrices.forEach((m,i)=>mesh.setMatrixAt(i,m));mesh.instanceMatrix.needsUpdate=true;mesh.computeBoundingBox();mesh.computeBoundingSphere();mesh.userData.nodeIds=batch.ids;mesh.castShadow=!batch.material.transparent;mesh.receiveShadow=true;group.add(mesh);}
     }
+    if(callouts.length){const lines=new THREE.BufferGeometry();lines.setAttribute('position',new THREE.Float32BufferAttribute(callouts,3));const callout=new THREE.LineSegments(lines,new THREE.LineBasicMaterial({color:'#9bb7c3',transparent:true,opacity:.5}));callout.userData.labelCallout=true;group.add(callout);}
     for(const point of scene.pointsOfInterest||[])if(labels.length<24)labels.push({text:point.name,position:point.position});
     group.updateMatrixWorld(true);
-    return {group,animated:false,labels,update(){},dispose(){disposeObject(group);}};
+    const assembly=createAssembly(group,ctx.motion!==false);
+    return {group,get animated(){return assembly.active;},labels,update(time){assembly.update(time);},dispose(){disposeObject(group);}};
   } catch(error){disposeObject(group);geometries.forEach(g=>g.dispose());materials.forEach(m=>m.dispose());throw error;}
 }

@@ -169,6 +169,8 @@ export interface ScenePointOfInterest {
 }
 
 export interface SceneNode {
+  /** Apoio e alinhamento relativos a um irmão ou à geometria do pai imediato. */
+  place?: import('./scene-placement.js').Placement;
   /** Identificador único e estável do nó */
   id: string;
   /** Nome legível do nó (ex: 'cabeca', 'roda_dianteira_esq', 'parede_norte') */

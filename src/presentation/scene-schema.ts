@@ -1,3 +1,4 @@
+import { resolvePlacements, type Placement } from '../../shared/scene-placement.js';
 import { SCENE_BUDGETS as B } from '../../shared/scene-capabilities.js';
 import type { SceneSpec, SceneNode, SceneGeometryDef, SceneMaterialDef, SceneRepetition, SceneTransform, Vec2, Vec3 } from '../../shared/scene-types.js';
 
@@ -100,8 +101,19 @@ export function parseSceneSpec(input:unknown):SceneSpec {
   const ids=new Set<string>();let nodes=0,instances=0,vertices=0,triangles=0,labels=0,drawables=0;
   const visit=(value:unknown,p:string,depth:number,multiplier:number,parentScale:number):SceneNode=>{
     if(depth>B.maxHierarchyDepth)fail(p,'hierarquia profunda demais');if(++nodes>B.maxTotalNodes)fail(p,'nós demais');
-    const n=obj(value,p);keys(n,['id','name','geometryId','materialId','geometry','material','position','rotation','scale','repetition','label','description','children'],p);
+    const n=obj(value,p);keys(n,['id','name','geometryId','materialId','geometry','material','position','rotation','scale','repetition','label','description','children','place'],p);
     const node:SceneNode={id:id(n.id,`${p}.id`),...transform(n,p)};if(ids.has(node.id))fail(`${p}.id`,'id repetido');ids.add(node.id);
+    if(n.place!==undefined){
+      const value=obj(n.place,`${p}.place`);keys(value,['on','under','beside','side','align','floor','gap','inset','offset'],`${p}.place`);
+      const targetKeys=['on','under','beside','floor'].filter(k=>value[k]!==undefined);
+      if(targetKeys.length!==1)fail(`${p}.place`,'escolha on, under, beside ou floor');
+      const place:Placement={};
+      for(const key of ['on','under','beside'] as const)if(value[key]!==undefined)place[key]=id(value[key],`${p}.place.${key}`);
+      for(const key of ['gap','floor','inset'] as const)if(value[key]!==undefined)place[key]=num(value[key],`${p}.place.${key}`,key==='inset'?0:-100,100);
+      for(const key of ['side','align'] as const)if(value[key]!==undefined){if(!['left','right','front','back',...(key==='align'?['center']:[])].includes(value[key]))fail(`${p}.place.${key}`,'direção inválida');place[key]=value[key];}
+      if(value.offset!==undefined)place.offset=vec(value.offset,`${p}.place.offset`) as Vec3;
+      node.place=place;
+    }
     const scale=parentScale*Math.max(...(node.scale||[1,1,1]));if(scale>1000)fail(`${p}.scale`,'escala acumulada grande demais');
     if(n.name!==undefined)node.name=text(n.name,`${p}.name`,80);if(n.description!==undefined)node.description=text(n.description,`${p}.description`,300);
     if(n.label!==undefined){node.label=text(n.label,`${p}.label`,55);if(++labels>B.maxLabels)fail(p,'rótulos demais');}
@@ -120,5 +132,5 @@ export function parseSceneSpec(input:unknown):SceneSpec {
   };
   scene.nodes=list(raw.nodes,'nodes',1,B.maxTotalNodes).map((v,i)=>visit(v,`nodes[${i}]`,1,1,1));if(!drawables)fail('nodes','cena sem geometria');
   if(raw.pointsOfInterest!==undefined){const pointIds=new Set<string>();scene.pointsOfInterest=list(raw.pointsOfInterest,'pointsOfInterest',0,24).map((v,i)=>{const p=`pointsOfInterest[${i}]`,point=obj(v,p);keys(point,['id','name','position','target','distance'],p);const key=id(point.id,`${p}.id`);if(pointIds.has(key))fail(p,'id repetido');pointIds.add(key);return {id:key,name:text(point.name,`${p}.name`,55),position:vec(point.position,`${p}.position`) as Vec3,...(point.target!==undefined?{target:vec(point.target,`${p}.target`) as Vec3}:{}),...(point.distance!==undefined?{distance:num(point.distance,`${p}.distance`,.01,1000)}:{})};});}
-  return scene;
+  try{return resolvePlacements(scene);}catch(error){return fail('place',error instanceof Error?error.message:'posicionamento inválido');}
 }

@@ -40,8 +40,8 @@ export const config: AppConfig = {
   gemini: {
     apiKey: process.env.GEMINI_API_KEY || '',
     model: process.env.GEMINI_MODEL || 'gemini-2.5-flash',
-    liveModel: process.env.GEMINI_LIVE_MODEL || 'gemini-2.5-flash-native-audio-latest',
-    voice: process.env.GEMINI_VOICE || 'Puck', // Vozes masculinas do Gemini Live: Puck, Fenrir, Charon, etc.
+    liveModel: process.env.GEMINI_LIVE_MODEL || 'gemini-3.8-live',
+    voice: process.env.GEMINI_VOICE || 'Charon', // Vozes do Gemini Live: Charon, Fenrir, Puck, Aoede, etc.
   },
   telegram: {
     botToken: process.env.TELEGRAM_BOT_TOKEN || '',

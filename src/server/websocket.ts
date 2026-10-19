@@ -54,7 +54,6 @@ export class JasperWebSocketServer {
     onStatus:(client,active,error)=>this.sendToClient(client,{type:'LOCAL_MIC_STATUS',active,error}),
     onAudio:(client,pcm)=>{
       if(!this.masterClients.has(client)||!this.voiceSessions.has(client)){this.localMicrophone.stop(client);return;}
-      if(['SPEAKING','PROCESSING'].includes(wakeWordManager.getState()))return;
       void withSceneSession(this.visualSession(client),()=>this.handleClientMessage(client,{type:'PCM_AUDIO_CHUNK',base64Pcm:pcm.toString('base64')})).catch(()=>this.localMicrophone.stop(client,'A conexão de voz falhou. Tente ativar o microfone novamente.'));
     },
   });

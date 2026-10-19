@@ -1,15 +1,36 @@
 import { WebSocket } from 'ws';
 import { spawn, ChildProcess, execSync } from 'child_process';
 
-const WS_URL = 'ws://localhost:3000/ws';
+const args = process.argv.slice(2);
+function getArg(name: string, def: string): string {
+  const idx = args.indexOf(name);
+  if (idx !== -1 && args[idx + 1]) return args[idx + 1];
+  return def;
+}
+const rawServerUrl = getArg('--server', getArg('--host', process.env.JASPER_SERVER_URL || 'ws://localhost:3000/ws'));
+let WS_URL = rawServerUrl.replace(/^http:/, 'ws:').replace(/^https:/, 'wss:');
+if (!WS_URL.endsWith('/ws')) {
+  WS_URL = WS_URL.replace(/\/$/, '') + '/ws';
+}
 
-console.log('🤖 Iniciando Cliente Local de Voz do JASPER (Notebook)...');
+console.log('🤖 Iniciando Cliente Local de Voz do JASPER (Notebook / Satélite)...');
 
 let isAssistantSpeaking = false;
 let arecord: ChildProcess | null = null;
 let aplay: ChildProcess | null = null;
 let ws: WebSocket | null = null;
 let reconnectTimer: NodeJS.Timeout | null = null;
+
+function startAplay() {
+  if (aplay) {
+    try { aplay.kill('SIGKILL'); } catch (e) {}
+    aplay = null;
+  }
+  aplay = spawn('aplay', ['-f', 'S16_LE', '-c', '1', '-r', '24000', '-t', 'raw']);
+  aplay.on('close', (code) => {
+    console.log(`🔊 Processo de áudio encerrado (código ${code})`);
+  });
+}
 
 function connect() {
   console.log(`🔌 Conectando em ${WS_URL}...`);
@@ -27,25 +48,18 @@ function connect() {
       arecord.kill();
       arecord = null;
     }
-    if (aplay) {
-      aplay.kill();
-      aplay = null;
-    }
+    startAplay();
+    console.log('🔊 Alto-falante ativo via aplay nas caixas do dispositivo.');
 
     const arecordArgs = micDevice
       ? ['-D', micDevice, '-f', 'S16_LE', '-c', '1', '-r', '16000', '-t', 'raw']
       : ['-f', 'S16_LE', '-c', '1', '-r', '16000', '-t', 'raw'];
     
     arecord = spawn('arecord', arecordArgs);
-    
-    // Se o navegador já estiver aberto, ele reproduz o áudio nativamente.
-    // Ative ENABLE_APLAY=true apenas se estiver usando sem o navegador aberto para evitar voz duplicada/eco.
-    // Mantém o aplay ativo tocando diretamente nas caixas de som do notebook
-    aplay = spawn('aplay', ['-f', 'S16_LE', '-c', '1', '-r', '24000', '-t', 'raw']);
-    console.log('🔊 Alto-falante ativo via aplay nas caixas do notebook.');
 
+    // Envio contínuo de áudio para permitir detecção de interrupção (barge-in) pelo servidor/Gemini Live
     arecord.stdout?.on('data', (chunk: Buffer) => {
-      if (ws && ws.readyState === WebSocket.OPEN && !isAssistantSpeaking) {
+      if (ws && ws.readyState === WebSocket.OPEN) {
         ws.send(JSON.stringify({
           type: 'PCM_AUDIO_CHUNK',
           base64Pcm: chunk.toString('base64')
@@ -57,12 +71,6 @@ function connect() {
     arecord.on('close', (code) => {
       console.log(`🎙️ Processo do microfone encerrado (código ${code})`);
     });
-
-    if (aplay) {
-      aplay.on('close', (code) => {
-        console.log(`🔊 Processo de áudio encerrado (código ${code})`);
-      });
-    }
   });
 
   ws.on('message', (data: Buffer) => {
@@ -72,10 +80,16 @@ function connect() {
       if (msg.type === 'STATE_CHANGE') {
         isAssistantSpeaking = (msg.state === 'SPEAKING');
         if (msg.state === 'SPEAKING') {
-          console.log('🔊 JASPER está falando (Microfone temporariamente pausado)');
+          console.log('🔊 JASPER está falando (Microfone ativo para interrupção natural)');
         } else if (msg.state === 'LISTENING') {
-          console.log('🎤 JASPER está ouvindo (Pode falar pelo celular!)');
+          console.log('🎤 JASPER está ouvindo...');
         }
+      }
+
+      if (msg.type === 'INTERRUPT') {
+        console.log('⚡ [Barge-in] Interrupção detectada! Cortando áudio imediatamente...');
+        isAssistantSpeaking = false;
+        startAplay();
       }
 
       if (msg.type === 'LIVE_AUDIO_CHUNK' && msg.audioBase64) {

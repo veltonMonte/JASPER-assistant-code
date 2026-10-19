@@ -151,15 +151,26 @@ export class GeminiLiveSession extends EventEmitter {
     
     const timeContext = `\n[CONTEXTO DE TEMPO DA CONEXÃO]\nO horário que esta sessão iniciou em Brasília (America/Sao_Paulo) foi: ${fmtStr}.\n(Formato ISO: ${isoStr}).\nATENÇÃO: Este horário pode estar desatualizado! Você DEVE SEMPRE chamar a ferramenta 'consultarHorario' ANTES de agendar qualquer alarme para saber a hora ATUAL exata e calcular o tempo corretamente!\n`;
 
+    const humanizedVoiceRules = `
+[DIRETRIZES DE CONVERSAÇÃO E INTELIGÊNCIA VIVA — ESTILO J.A.R.V.I.S.]
+1. Fale em português brasileiro natural, direto, fluido e amigável. Mantenha entonação viva e expressiva.
+2. NUNCA use clichês robóticos de teleatendimento ("Com certeza!", "Como posso ajudar?", "Processando solicitação", "Estou à disposição").
+3. Mantenha continuidade conversacional: use o histórico recente sem se reapresentar ou cumprimentar de novo a cada turno.
+4. NUNCA finja nem afirme que executou qualquer comando, ação ou mudança no sistema antes de receber a resposta da ferramenta.
+5. Adapte seu ritmo: seja conciso e objetivo em comandos práticos; converse com inteligência e empatia quando o momento for de diálogo aberto.
+`;
+
     const fullPrompt = JASPER_SYSTEM_PROMPT + personalityPrompt + memorySummary + timeContext +
-      '\nVocê é JASPER e está conversando por voz em tempo real. Responda com voz natural e objetiva em português do Brasil.' + buildVoiceDirection(voiceSettings);
+      humanizedVoiceRules + buildVoiceDirection(voiceSettings);
+
+    const liveModelName = config.gemini.liveModel.replace(/^models\//, '');
 
     const setupPayload = {
       setup: {
-        model: `models/${config.gemini.liveModel}`,
+        model: `models/${liveModelName}`,
         generationConfig: {
           responseModalities: ['AUDIO'],
-          ...fastAudioGenerationConfig(config.gemini.liveModel),
+          ...fastAudioGenerationConfig(liveModelName),
           speechConfig: {
             voiceConfig: {
               prebuiltVoiceConfig: {

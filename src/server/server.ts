@@ -9,6 +9,7 @@ import { jasperWsServer } from './websocket.js';
 import { scheduler } from './scheduler.js';
 import { proactiveService } from '../proactive/runtime.js';
 import { isAllowedOrigin } from '../security/origin.js';
+import { systemSecurityMonitor } from '../security/system-monitor.js';
 
 const app = express();
 
@@ -51,6 +52,10 @@ async function bootstrap() {
 
     // 2. Inicializa o agendador de alarmes e tarefas
     scheduler.start();
+
+    // 3. Inicializa o agente de monitoramento de segurança 24h
+    systemSecurityMonitor.start();
+
     try {
       await proactiveService.init();
       proactiveService.start();

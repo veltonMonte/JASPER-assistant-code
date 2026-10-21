@@ -10,6 +10,7 @@ import { baixarMidia } from './media.js';
 import { ajustarPersonalidade, consultarPersonalidade, restaurarPersonalidadePadrao } from './personality.js';
 import { createVisualPresentation } from '../presentation/scene-generation.js';
 import { currentSceneSession } from '../presentation/scene-session.js';
+import { verificarSegurancaSistema } from './system-security.js';
 
 /**
  * Declaração das ferramentas disponíveis para o modelo Google Gemini (Function Calling)
@@ -340,6 +341,20 @@ export const geminiToolDeclarations = [
       required: [],
     },
   },
+  {
+    name: 'verificar_seguranca_sistema',
+    description: 'Audita e consulta o status de segurança do computador em tempo real (processos suspeitos, mineradores, integridade de arquivos críticos e permissões).',
+    parameters: {
+      type: 'OBJECT',
+      properties: {
+        forcado: {
+          type: 'BOOLEAN',
+          description: 'true para forçar uma nova varredura completa imediatamente em vez de usar o relatório recente.',
+        },
+      },
+      required: [],
+    },
+  },
 ];
 
 import { toolEvents } from '../events/toolEvents.js';
@@ -471,6 +486,9 @@ export async function executeToolByName(name: string, args: Record<string, any> 
         break;
       case 'baixar_midia':
         result = await baixarMidia(args.url || '', args.tipo || 'video');
+        break;
+      case 'verificar_seguranca_sistema':
+        result = await verificarSegurancaSistema(args.forcado === true);
         break;
       default:
         result = { error: `Ferramenta "${name}" desconhecida ou não registrada.` };

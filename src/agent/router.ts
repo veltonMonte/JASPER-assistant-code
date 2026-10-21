@@ -148,6 +148,25 @@ export class IntentRouter {
       };
     }
 
+    // 6. INTENÇÃO: Verificar Segurança do Sistema
+    if (
+      cleanText.includes('segurança do pc') ||
+      cleanText.includes('segurança do sistema') ||
+      cleanText.includes('verificar segurança') ||
+      cleanText.includes('status de segurança') ||
+      cleanText.includes('tem algum vírus') ||
+      cleanText.includes('processo suspeito')
+    ) {
+      const toolRes = await executeToolByName('verificar_seguranca_sistema');
+      return {
+        handledDirectly: true,
+        intentName: 'CHECK_SYSTEM_SECURITY',
+        responseSpeech: toolRes.message,
+        toolResult: toolRes,
+        durationMs: Date.now() - startTime,
+      };
+    }
+
     // Se não for um comando simples e determinístico, delega para a IA Gemini
     return {
       handledDirectly: false,

@@ -12,6 +12,7 @@ import { proactiveService } from '../proactive/runtime.js';
 import { naturalSpeechService } from '../voice/natural-speech.js';
 import { createRequireAuth } from '../security/auth.js';
 import { config } from '../config/config.js';
+import { verificarSegurancaSistema } from '../tools/system-security.js';
 
 const router = Router();
 const requireAuth = createRequireAuth(token => jasperWsServer.isVoiceSessionAuthorized(token), config.security.token);
@@ -174,6 +175,24 @@ router.post('/proactive/refresh', async (_req: Request, res: Response) => {
     await proactiveService.tick();
     res.json(proactiveService.snapshot());
   } catch { res.status(502).json({ error: 'Não foi possível consultar as notícias agora.' }); }
+});
+
+router.get('/security/status', async (_req: Request, res: Response) => {
+  try {
+    const report = await verificarSegurancaSistema(false);
+    res.json(report);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
+router.post('/security/scan', async (_req: Request, res: Response) => {
+  try {
+    const report = await verificarSegurancaSistema(true);
+    res.json(report);
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
 });
 
 export default router;

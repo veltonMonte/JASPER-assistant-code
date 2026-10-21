@@ -112,6 +112,19 @@ export class JasperWebSocketServer {
       });
     });
 
+    // Alertas do Agente de Segurança 24h
+    toolEvents.on('security_threat_detected', (threat: any) => {
+      this.broadcastToMasters({
+        type: 'SYSTEM_ANNOUNCEMENT',
+        text: `Alerta de segurança do JASPER: detectada ameaça de nível ${String(threat.severity || '').toUpperCase()}. ${threat.title}.`,
+        speak: true,
+      });
+      this.broadcastToMasters({
+        type: 'SECURITY_ALERT',
+        threat,
+      });
+    });
+
 
     // Eventos de Autorização de Dispositivos na Rede
     toolEvents.on("device_access_requested", (payload: any) => {

@@ -1,6 +1,7 @@
 import { dbManager, PersonalityConfig } from '../database/database.js';
 import { formatTarsConfirmation } from '../ai/personality.js';
 import { toolEvents } from '../events/toolEvents.js';
+import { innerLife } from '../ai/inner-life-service.js';
 
 export async function ajustarPersonalidade(
   parametro: string,
@@ -69,6 +70,7 @@ export async function restaurarPersonalidadePadrao(): Promise<{
   personality: PersonalityConfig;
 }> {
   const defaults = await dbManager.resetPersonality();
+  innerLife.reset();
   const message = formatTarsConfirmation('padrao', undefined, defaults);
 
   toolEvents.emit('personality_updated', defaults);

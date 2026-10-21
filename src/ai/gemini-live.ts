@@ -3,6 +3,7 @@ import { fastAudioGenerationConfig, LIVE_SILENCE_MS, LIVE_PREFIX_PADDING_MS } fr
 import { voicePreferences } from '../voice/preferences.js';
 import { buildVoiceDirection } from '../voice/profiles.js';
 import { buildPersonalityPrompt } from "./personality.js";
+import { innerLife } from './inner-life-service.js';
 import { WebSocket } from 'ws';
 import { EventEmitter } from 'events';
 import { config } from '../config/config.js';
@@ -142,7 +143,8 @@ export class GeminiLiveSession extends EventEmitter {
     let personalityPrompt = '';
     try {
       const personality = await dbManager.getPersonality();
-      personalityPrompt = "\n" + buildPersonalityPrompt(personality) + "\n";
+      const human = await innerLife.adapt(personality);
+      personalityPrompt = "\n" + buildPersonalityPrompt(human.personality) + human.prompt + "\n";
     } catch (e) {}
 
     const now = new Date();

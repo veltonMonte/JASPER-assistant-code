@@ -1,5 +1,6 @@
 import { activeScenePrompt } from '../presentation/scene-session.js';
 import { buildPersonalityPrompt } from "./personality.js";
+import { innerLife } from './inner-life-service.js';
 import { GoogleGenerativeAI } from '@google/generative-ai';
 import { config } from '../config/config.js';
 import { JASPER_SYSTEM_PROMPT } from './prompts.js';
@@ -75,7 +76,8 @@ export class GeminiBrain {
       let personalityPrompt = '';
       try {
         const personality = await dbManager.getPersonality();
-        personalityPrompt = "\n" + buildPersonalityPrompt(personality) + "\n";
+        const human = await innerLife.adapt(personality);
+        personalityPrompt = "\n" + buildPersonalityPrompt(human.personality) + human.prompt + "\n";
       } catch (e) {}
 
       // Carrega memórias salvas para injetar no contexto do sistema

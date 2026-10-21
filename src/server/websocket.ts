@@ -31,6 +31,7 @@ import {
   resolveTerminalApproval,
   wantsRemember,
 } from '../tools/terminal.js';
+import { innerLife } from '../ai/inner-life-service.js';
 
 export class JasperWebSocketServer {
   private wss: WebSocketServer | null = null;
@@ -556,6 +557,7 @@ export class JasperWebSocketServer {
       this.geminiLive.on('turn_complete', () => {
         void this.recoverUnansweredLiveRequest();
         this.clearVoiceResponseTimer();
+        innerLife.observe(this.turnUserTranscript);
         this.turnUserTranscript = '';
         vadManager.notifyAssistantSpeaking(false);
         this.turnAccumulatedText = '';
@@ -739,6 +741,7 @@ export class JasperWebSocketServer {
 
       case "RESET_PERSONALITY": {
         const defaults = await dbManager.resetPersonality();
+        innerLife.reset();
         this.broadcastToClients({
           type: "PERSONALITY_UPDATE",
           personality: defaults,
@@ -854,6 +857,7 @@ export class JasperWebSocketServer {
         console.log(`💬 Comando recebido: "${text}"`);
         registerUserSpeech();
         appendUserTranscript(text);
+        innerLife.observe(text);
 
         this.geminiLive?.setVisualSession(this.visualSession(ws));
         beginSceneTurn(this.visualSession(ws));
@@ -1022,6 +1026,7 @@ export class JasperWebSocketServer {
 
       registerUserSpeech();
       appendUserTranscript(commandText);
+      innerLife.observe(commandText);
 
       const pendingReq = getPendingTerminalRequest();
       if (pendingReq) {

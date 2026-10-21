@@ -6,6 +6,8 @@ import {
   wantsRemember,
   interpretTerminalIntent,
 } from '../tools/terminal.js';
+import { say } from './phrasebook.js';
+import { innerLife } from '../ai/inner-life-service.js';
 
 export interface RouteResult {
   handledDirectly: boolean;
@@ -86,7 +88,7 @@ export class IntentRouter {
       }
       const toolRes = await executeToolByName('executar_terminal', { comando: termIntent.command }, { isMaster: true });
       const speech = toolRes.status === 'aguardando_confirmacao'
-        ? `Solicitei a permissão para ${termIntent.description} (comando: "${termIntent.command}"). Você confirma a execução?`
+        ? say('terminal_ask', { affinity: innerLife.snapshot().affinity, vars: { descricao: termIntent.description, comando: termIntent.command } })
         : (toolRes.message || 'Comando executado com sucesso.');
       return {
         handledDirectly: true,
@@ -105,10 +107,13 @@ export class IntentRouter {
       cleanText.includes('liga o computador')
     ) {
       const toolRes = await executeToolByName('ligar_pc');
+      const affinity = innerLife.snapshot().affinity;
       return {
         handledDirectly: true,
         intentName: 'TURN_ON_PC',
-        responseSpeech: 'Pronto, estou ligando seu computador.',
+        responseSpeech: toolRes?.success === false
+          ? say('pc_on_failed', { affinity, vars: { motivo: String(toolRes.message || 'erro desconhecido') } })
+          : say('pc_on', { affinity }),
         toolResult: toolRes,
         durationMs: Date.now() - startTime,
       };
@@ -123,9 +128,7 @@ export class IntentRouter {
       cleanText.includes('computador está online')
     ) {
       const toolRes = await executeToolByName('verificar_pc');
-      const speech = toolRes.online
-        ? 'Seu computador está online e respondendo na rede.'
-        : 'Seu computador está offline ou desligado.';
+      const speech = say(toolRes.online ? 'pc_online' : 'pc_offline', { affinity: innerLife.snapshot().affinity });
       return {
         handledDirectly: true,
         intentName: 'CHECK_PC_STATUS',
@@ -160,7 +163,7 @@ export class IntentRouter {
       return {
         handledDirectly: true,
         intentName: 'SHUTDOWN_PC',
-        responseSpeech: 'Solicitação de desligamento enviada.',
+        responseSpeech: say('pc_off', { affinity: innerLife.snapshot().affinity }),
         toolResult: toolRes,
         durationMs: Date.now() - startTime,
       };

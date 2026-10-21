@@ -12,11 +12,13 @@ Branch: `feat/jasper-humano`.
 2. **Prompts** (`personality.ts`, `prompts.ts`): bloco "Estilo J.A.R.V.I.S. à brasileira", lista de frases de atendimento a evitar e regra de honestidade ajustada para permitir expressar o estado interno sem fingir ser humano.
 3. **Respostas diretas** (`src/agent/phrasebook.ts`): frases variadas, sem repetição seguida, com registro mais próximo conforme a afinidade. Mensagens de segurança do terminal não foram alteradas.
 4. **Ligações**: texto (`gemini.ts`) a cada resposta; voz ao vivo (`gemini-live.ts`) na abertura da sessão; WebSocket registra as falas.
+5. **API REST e Encerramento Seguro**:
+   - `GET /api/personality/inner-life`: consulta em tempo real de ânimo, energia e afinidade com descrições em linguagem natural.
+   - Graceful Shutdown no `server.ts` capturando `SIGINT` e `SIGTERM` para garantir o flush do estado antes de encerrar o processo.
 
 ## Limites conhecidos
-- Na voz ao vivo o estado entra no prompt apenas ao (re)conectar a sessão; o texto o recebe a cada resposta.
-- O estado é salvo com atraso de 3 s; não há rotina de encerramento que force a gravação.
+- Na voz ao vivo o estado entra no prompt na abertura da sessão; o texto o recebe a cada resposta.
 - O ânimo nunca altera fatos, ferramentas, aprovações nem alertas de segurança.
 
 ## Testes
-`tests/inner-life.test.ts` (13 testes). Suíte completa: 176/191, com os mesmos 9 arquivos da linha de base (testes Linux-only no Windows).
+`tests/inner-life.test.ts` (14 testes). Suíte completa: 176/191, com os mesmos 9 arquivos da linha de base (testes Linux-only no Windows).

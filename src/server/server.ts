@@ -10,6 +10,7 @@ import { scheduler } from './scheduler.js';
 import { proactiveService } from '../proactive/runtime.js';
 import { isAllowedOrigin } from '../security/origin.js';
 import { systemSecurityMonitor } from '../security/system-monitor.js';
+import { innerLife } from '../ai/inner-life-service.js';
 
 const app = express();
 
@@ -83,6 +84,23 @@ async function bootstrap() {
       console.log(`📱 Acesso Celular: http://<IP_DO_NOTEBOOK>:${config.port}`);
       console.log(`==================================================\n`);
     });
+
+    const gracefulShutdown = async (signal: string) => {
+      console.log(`\n🛑 Sinal ${signal} recebido. Salvando estado e encerrando o JASPER com segurança...`);
+      try {
+        await innerLife.flush();
+        systemSecurityMonitor.stop();
+        scheduler.stop();
+        await dbManager.close();
+      } catch (err) {
+        console.error('⚠️ Erro ao encerrar serviços:', err);
+      } finally {
+        process.exit(0);
+      }
+    };
+
+    process.once('SIGINT', () => void gracefulShutdown('SIGINT'));
+    process.once('SIGTERM', () => void gracefulShutdown('SIGTERM'));
   } catch (error: any) {
     console.error('❌ Erro fatal durante a inicialização do JASPER:', error.message);
     process.exit(1);

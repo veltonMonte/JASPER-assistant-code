@@ -154,3 +154,13 @@ test('o agente de texto inclui a vida interior e a personalidade efetiva no prom
   assert.match(instruction, /ESTILO J\.A\.R\.V\.I\.S\./);
   assert.match(instruction, /A verdade não é ajustável/);
 });
+
+test('labels de resumo de ânimo, energia e afinidade retornam descrições em pt-BR', async () => {
+  const { moodLabel, energyLabel, affinityLabel } = await import('../src/ai/inner-life.js');
+  assert.equal(typeof moodLabel(20), 'string');
+  assert.equal(typeof energyLabel(60), 'string');
+  assert.equal(typeof affinityLabel(50), 'string');
+  assert.match(moodLabel(60), /animado/);
+  assert.match(energyLabel(80), /alta/);
+  assert.match(affinityLabel(90), /parceria/);
+});

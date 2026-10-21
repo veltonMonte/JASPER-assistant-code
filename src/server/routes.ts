@@ -104,6 +104,26 @@ router.post("/personality", async (req: Request, res: Response) => {
   }
 });
 
+router.get("/personality/inner-life", async (_req: Request, res: Response) => {
+  try {
+    const { innerLife } = await import('../ai/inner-life-service.js');
+    const { moodLabel, energyLabel, affinityLabel } = await import('../ai/inner-life.js');
+    await innerLife.ensureLoaded();
+    const snapshot = innerLife.snapshot();
+    res.json({
+      success: true,
+      innerLife: snapshot,
+      summary: {
+        mood: moodLabel(snapshot.mood),
+        energy: energyLabel(snapshot.energy),
+        affinity: affinityLabel(snapshot.affinity),
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ success: false, error: err.message });
+  }
+});
+
 /**
  * Status do microfone ativo (WO Mic vs Notebook)
  */

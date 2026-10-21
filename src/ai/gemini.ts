@@ -57,7 +57,8 @@ export class GeminiBrain {
    */
   public async generateResponse(
     userPrompt: string,
-    historyContext: any[] = []
+    historyContext: any[] = [],
+    options?: { isMaster?: boolean }
   ): Promise<GeminiResponse> {
     const startTime = Date.now();
     const toolsExecuted: string[] = [];
@@ -132,7 +133,7 @@ export class GeminiBrain {
 
         for (const fc of functionCalls) {
           toolsExecuted.push(fc.name);
-          const toolResult = await executeToolByName(fc.name, fc.args as any);
+          const toolResult = await executeToolByName(fc.name, fc.args as any, { isMaster: options?.isMaster !== false });
 
           if (fc.name === 'renderizar_grafico' && toolResult?.chartConfig) {
             chartConfigs.push(toolResult.chartConfig);

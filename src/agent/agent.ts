@@ -24,14 +24,15 @@ export class JasperAgent {
    */
   public async processCommand(
     commandText: string,
-    sttDurationMs: number = 0
+    sttDurationMs: number = 0,
+    options?: { isMaster?: boolean }
   ): Promise<AgentExecutionResult> {
     const overallStartTime = Date.now();
     console.log(`\n🎙️ [JASPER] Recebido comando: "${commandText}"`);
 
     // 1. Passo: Roteador Híbrido de Velocidade (Intent Router)
     const routerStartTime = Date.now();
-    const routeResult = await intentRouter.route(commandText);
+    const routeResult = await intentRouter.route(commandText, options);
     const routerMs = Date.now() - routerStartTime;
 
     // Se o Intent Router atendeu diretamente (< 15ms)
@@ -77,7 +78,7 @@ export class JasperAgent {
     console.log(`🧠 [Gemini Agent] Encaminhando solicitação para o cérebro de IA...`);
     const history = sessionContext.getMessages();
 
-    const geminiResult = await geminiBrain.generateResponse(commandText, history);
+    const geminiResult = await geminiBrain.generateResponse(commandText, history, options);
     const geminiMs = geminiResult.durationMs;
 
     // Adiciona ao contexto conversacional

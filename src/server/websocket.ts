@@ -12,7 +12,6 @@ import {
   requestDeviceAccess,
   resolveDeviceAccess,
 } from "../tools/devices.js";
-import { registerTerminalAgent } from "../tools/remote-terminal.js";
 import { setProactiveDelivery } from '../proactive/runtime.js';
 import type { ProactiveNotice } from '../proactive/types.js';
 import { dbManager } from "../database/database.js";
@@ -44,7 +43,6 @@ export class JasperWebSocketServer {
   private activeMic: "womic" | "notebook" = "notebook";
   private masterClients = new Set<WebSocket>();
   private voiceSessions = new Map<WebSocket, string>();
-  private terminalAgentClients = new Set<WebSocket>();
   private turnUserTranscript = '';
   private voiceResponseTimer: ReturnType<typeof setTimeout> | null = null;
   private clientIps = new Map<WebSocket, string>();
@@ -364,7 +362,6 @@ export class JasperWebSocketServer {
         this.unansweredLiveRequests.delete(ws);
         visualGenerator.cancel(this.visualSession(ws));
         this.voiceSessions.delete(ws);
-        this.terminalAgentClients.delete(ws);
         this.presence.delete(ws);
         this.masterClients.delete(ws);
         this.clientIps.delete(ws);
@@ -616,9 +613,7 @@ export class JasperWebSocketServer {
 
   private async handleClientMessage(ws: WebSocket, payload: any): Promise<void> {
     const { type, base64Pcm, text, audioBase64 } = payload;
-    if (!['AUTH_CHECK', 'REQUEST_DEVICE_ACCESS', 'REGISTER_TERMINAL_AGENT'].includes(type)
-      && !this.voiceSessions.has(ws)
-      && !(type === 'REMOTE_COMMAND_RESULT' && this.terminalAgentClients.has(ws))) {
+    if (!['AUTH_CHECK', 'REQUEST_DEVICE_ACCESS'].includes(type) && !this.voiceSessions.has(ws)) {
       return;
     }
     if (type === 'CLIENT_PRESENCE') {
@@ -716,17 +711,6 @@ export class JasperWebSocketServer {
         if (!this.masterClients.has(ws)) break;
         const { id, approved } = payload;
         await resolveDeviceAccess(id, approved, "ui");
-        break;
-      }
-
-      case "REGISTER_TERMINAL_AGENT": {
-        if (await registerTerminalAgent(ws, payload)) this.terminalAgentClients.add(ws);
-        break;
-      }
-
-      case "REMOTE_COMMAND_RESULT": {
-        const { execId, success, output, error } = payload;
-        toolEvents.emit(`remote_exec_result_${execId}`, { success, output, error });
         break;
       }
 
@@ -838,6 +822,13 @@ export class JasperWebSocketServer {
       }
 
       case 'TERMINAL_APPROVAL_RESPONSE': {
+        if (!this.masterClients.has(ws)) {
+          this.sendToClient(ws, {
+            type: 'ERROR',
+            message: 'Apenas a máquina principal (Master) pode aprovar comandos de terminal.',
+          });
+          break;
+        }
         const { id, approved, customCommand, remember } = payload;
         if (typeof id !== 'string' || typeof approved !== 'boolean') break;
         await resolveTerminalApproval(id, { approved, customCommand, remember }, 'ui');
@@ -871,6 +862,15 @@ export class JasperWebSocketServer {
         // Reconhecimento verbal ou textual de aprovação para solicitações pendentes
         const pendingReq = getPendingTerminalRequest();
         if (pendingReq) {
+          if (!this.masterClients.has(ws)) {
+            this.sendToClient(ws, {
+              type: 'ASSISTANT_RESPONSE',
+              text: 'Apenas a máquina principal (Master) tem permissão para aprovar comandos no terminal.',
+              routeType: 'DIRECT_INTENT',
+            });
+            return;
+          }
+
           const decision = interpretApprovalSpeech(lowerText, pendingReq.riskLevel);
           if (decision === 'approve') {
             console.log(`[Terminal] Comando aprovado por voz/texto: "${text}"`);
@@ -916,6 +916,7 @@ export class JasperWebSocketServer {
           wakeWordManager.setState('PROCESSING');this.broadcastState('PROCESSING');
           await this.processVisualRequest(ws,text);
         } else if (this.geminiLive && this.geminiLive.isLiveConnected()) {
+          this.geminiLive.setIsMaster(this.masterClients.has(ws));
           this.unansweredLiveRequests.set(ws,contextualText);
           console.log(`[WebSocket] Roteando comando de texto para Gemini Live: "${text}"`);
           this.geminiLive.sendTextPrompt(contextualText);
@@ -949,7 +950,10 @@ export class JasperWebSocketServer {
 
   private adoptVoiceClient(client:WebSocket):boolean {
     if(this.activeClient&&this.activeClient!==client&&wakeWordManager.getState()!=='IDLE')return false;
-    this.activeClient=client;this.geminiLive?.setVisualSession?.(this.visualSession(client));return true;
+    this.activeClient=client;
+    this.geminiLive?.setVisualSession?.(this.visualSession(client));
+    this.geminiLive?.setIsMaster(this.masterClients.has(client));
+    return true;
   }
 
   private async recoverUnansweredLiveRequest():Promise<void> {
@@ -971,7 +975,8 @@ export class JasperWebSocketServer {
 
   private async processTextFallback(ws: WebSocket, commandText: string): Promise<void> {
     try {
-      const result = await jasperAgent.processCommand(commandText, 0);
+      const isMaster = this.masterClients.has(ws);
+      const result = await jasperAgent.processCommand(commandText, 0, { isMaster });
 
       wakeWordManager.setState('SPEAKING');
       this.broadcastState('SPEAKING');
@@ -1020,6 +1025,15 @@ export class JasperWebSocketServer {
 
       const pendingReq = getPendingTerminalRequest();
       if (pendingReq) {
+        if (!this.masterClients.has(ws)) {
+          this.sendToClient(ws, {
+            type: 'ASSISTANT_RESPONSE',
+            text: 'Apenas a máquina principal (Master) tem permissão para aprovar comandos no terminal.',
+            routeType: 'DIRECT_INTENT',
+          });
+          return;
+        }
+
         const decision = interpretApprovalSpeech(commandText, pendingReq.riskLevel);
         if (decision === 'approve') {
           const remember = wantsRemember(commandText);
@@ -1046,6 +1060,7 @@ export class JasperWebSocketServer {
 
       if (this.geminiLive && this.geminiLive.isLiveConnected()) {
         console.log(`[WebSocket] Roteando Blob de áudio transcrito para Gemini Live: "${commandText}"`);
+        this.geminiLive.setIsMaster(this.masterClients.has(ws));
         this.geminiLive.sendTextPrompt(commandText);
       } else {
         await this.processTextFallback(ws, commandText);

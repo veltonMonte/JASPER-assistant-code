@@ -32,6 +32,9 @@ export class GeminiLiveSession extends EventEmitter {
   private visualSessionId='';
   public setVisualSession(id:string):void {this.visualSessionId=id;}
 
+  private isMaster: boolean = false;
+  public setIsMaster(isMaster: boolean): void { this.isMaster = isMaster; }
+
   public async connect(): Promise<void> {
     this.shouldReconnect = true;
     if (this.reconnectTimer) {
@@ -272,7 +275,11 @@ export class GeminiLiveSession extends EventEmitter {
           this.emit('tool_call_start', { name: fc.name, args: fc.args });
 
           try {
-            const toolResult = await executeToolByName(fc.name, fc.args || {}, { live: true,visualSessionId:this.visualSessionId });
+            const toolResult = await executeToolByName(fc.name, fc.args || {}, {
+              live: true,
+              visualSessionId: this.visualSessionId,
+              isMaster: this.isMaster,
+            });
             this.emit('tool_call_end', { name: fc.name, result: toolResult });
             this.sendToolResponse(fc.id || fc.name, fc.name, toolResult);
           } catch (err: any) {

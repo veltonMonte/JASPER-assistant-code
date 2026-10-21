@@ -463,8 +463,16 @@ export async function cancelAllPendingTerminal(source: ApprovalSource = 'interru
 
 /**
  * Modo bloqueante (agente de texto): aguarda a decisão do usuário e retorna o resultado.
+ * Restrito exclusivamente à máquina principal (Master).
  */
-export async function executarTerminal(comando: string): Promise<TerminalResult> {
+export async function executarTerminal(comando: string, isMaster = false): Promise<TerminalResult> {
+  if (!isMaster) {
+    return {
+      success: false,
+      comando,
+      message: 'Execução de terminal bloqueada pela política de segurança: apenas a máquina principal (Master) pode executar comandos no sistema operacional.',
+    };
+  }
   const res = await requestTerminalCommand(comando, 'blocking');
   if ('immediate' in res) return res.immediate;
   return new Promise((resolve) => {
@@ -475,8 +483,17 @@ export async function executarTerminal(comando: string): Promise<TerminalResult>
 /**
  * Modo de voz (Gemini Live): não bloqueia o modelo. Registra a solicitação e devolve
  * instruções para o modelo pedir a confirmação verbal ao usuário.
+ * Restrito exclusivamente à máquina principal (Master).
  */
-export async function solicitarTerminalPorVoz(comando: string): Promise<any> {
+export async function solicitarTerminalPorVoz(comando: string, isMaster = false): Promise<any> {
+  if (!isMaster) {
+    return {
+      success: false,
+      status: 'negado_dispositivo_remoto',
+      comando,
+      message: 'Comandos de terminal não podem ser solicitados ou executados por dispositivos remotos. Use diretamente o computador principal.',
+    };
+  }
   const res = await requestTerminalCommand(comando, 'live');
   if ('immediate' in res) return res.immediate;
   const { pending } = res;

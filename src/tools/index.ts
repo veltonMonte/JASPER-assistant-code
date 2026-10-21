@@ -366,6 +366,7 @@ export interface ToolExecutionContext {
   /** true quando chamado pela sessão de voz (Gemini Live): ferramentas de aprovação não bloqueiam o modelo */
   live?: boolean;
   visualSessionId?: string;
+  isMaster?: boolean;
 }
 
 export async function executeToolByName(name: string, args: Record<string, any> = {}, ctx: ToolExecutionContext = {}): Promise<any> {
@@ -478,8 +479,8 @@ export async function executeToolByName(name: string, args: Record<string, any> 
         break;
       case 'executar_terminal':
         result = ctx.live
-          ? await solicitarTerminalPorVoz(args.comando || '')
-          : await executarTerminal(args.comando || '');
+          ? await solicitarTerminalPorVoz(args.comando || '', ctx.isMaster === true)
+          : await executarTerminal(args.comando || '', ctx.isMaster === true);
         break;
       case 'confirmar_comando_terminal':
         result = await confirmarComandoTerminal();

@@ -21,13 +21,22 @@ export interface RouteResult {
  * sem necessidade de chamada ao LLM (Gemini) para atingir mínima latência.
  */
 export class IntentRouter {
-  public async route(input: string): Promise<RouteResult> {
+  public async route(input: string, options?: { isMaster?: boolean }): Promise<RouteResult> {
     const startTime = Date.now();
     const cleanText = input.toLowerCase().trim();
 
     // 0. INTENÇÃO: Confirmação ou Negação de Comando de Terminal Pendente
     const pending = getPendingTerminalRequest();
     if (pending) {
+      if (options?.isMaster === false) {
+        return {
+          handledDirectly: true,
+          intentName: 'TERMINAL_DENIED_NON_MASTER',
+          responseSpeech: 'Apenas a máquina principal (Master) pode autorizar a execução de comandos no terminal.',
+          toolResult: { success: false, error: 'Dispositivo remoto não autorizado' },
+          durationMs: Date.now() - startTime,
+        };
+      }
       const decision = interpretApprovalSpeech(cleanText, pending.riskLevel);
       if (decision === 'approve') {
         const remember = wantsRemember(cleanText);
@@ -66,7 +75,16 @@ export class IntentRouter {
     // 0.1 INTENÇÃO: Comando de Terminal em Linguagem Natural
     const termIntent = interpretTerminalIntent(cleanText);
     if (termIntent) {
-      const toolRes = await executeToolByName('executar_terminal', { comando: termIntent.command });
+      if (options?.isMaster === false) {
+        return {
+          handledDirectly: true,
+          intentName: 'TERMINAL_DENIED_NON_MASTER',
+          responseSpeech: 'A execução de comandos no terminal é restrita exclusivamente ao computador principal (Master).',
+          toolResult: { success: false, error: 'Dispositivo remoto não autorizado para terminal' },
+          durationMs: Date.now() - startTime,
+        };
+      }
+      const toolRes = await executeToolByName('executar_terminal', { comando: termIntent.command }, { isMaster: true });
       const speech = toolRes.status === 'aguardando_confirmacao'
         ? `Solicitei a permissão para ${termIntent.description} (comando: "${termIntent.command}"). Você confirma a execução?`
         : (toolRes.message || 'Comando executado com sucesso.');
